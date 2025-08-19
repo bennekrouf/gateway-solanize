@@ -1,0 +1,33 @@
+server:
+  host: "127.0.0.1"
+  port: 5000
+  workers: 4
+
+cors:
+  allowed_origins: ["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000"]
+  allowed_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+  allowed_headers: ["Content-Type", "Authorization"]
+  allow_credentials: true
+
+database:
+  url: "sqlite://gateway.db"
+  max_connections: 10
+
+auth:
+  jwt_secret: "change-this-super-secret-jwt-key-in-production"
+  jwt_expires_hours: 24
+  challenge_expires_minutes: 5
+
+chat:
+  max_sessions_per_user: 100
+  max_messages_per_session: 1000
+  ai_provider: "placeholder" # openai, claude, placeholder
+
+payment:
+  solana_service_url: "http://localhost:8000" # Solana CLI API Gateway
+  premium_price_sol: 0.1
+  timeout_seconds: 30
+
+logging:
+  level: "info" # trace, debug, info, warn, error
+  format: "json" # json, pretty
