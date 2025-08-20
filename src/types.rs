@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{FromRow, Row};
 use uuid::Uuid;
 
-// User types
-#[derive(Debug, Clone, FromRow, Serialize)]
+// Custom User struct with manual FromRow implementation
+#[derive(Debug, Clone, Serialize)]
 pub struct User {
     pub id: Uuid,
     pub wallet_address: String,
@@ -12,9 +12,132 @@ pub struct User {
     pub is_premium: bool,
 }
 
+impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for User {
+    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        let id_str: String = row.try_get("id")?;
+        let id = Uuid::parse_str(&id_str).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        let created_at_str: String = row.try_get("created_at")?;
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+            .with_timezone(&Utc);
+
+        Ok(User {
+            id,
+            wallet_address: row.try_get("wallet_address")?,
+            created_at,
+            is_premium: row.try_get("is_premium")?,
+        })
+    }
+}
+
+// Do the same for other structs that have UUID fields
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatSession {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for ChatSession {
+    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        let id_str: String = row.try_get("id")?;
+        let id = Uuid::parse_str(&id_str).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        let user_id_str: String = row.try_get("user_id")?;
+        let user_id =
+            Uuid::parse_str(&user_id_str).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        let created_at_str: String = row.try_get("created_at")?;
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+            .with_timezone(&Utc);
+
+        Ok(ChatSession {
+            id,
+            user_id,
+            title: row.try_get("title")?,
+            created_at,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Message {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub content: String,
+    pub is_user: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for Message {
+    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        let id_str: String = row.try_get("id")?;
+        let id = Uuid::parse_str(&id_str).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        let session_id_str: String = row.try_get("session_id")?;
+        let session_id =
+            Uuid::parse_str(&session_id_str).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        let created_at_str: String = row.try_get("created_at")?;
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+            .with_timezone(&Utc);
+
+        Ok(Message {
+            id,
+            session_id,
+            content: row.try_get("content")?,
+            is_user: row.try_get("is_user")?,
+            created_at,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Transaction {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub transaction_type: String,
+    pub amount: Option<f64>,
+    pub status: String,
+    pub tx_hash: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for Transaction {
+    fn from_row(row: &'r sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        let id_str: String = row.try_get("id")?;
+        let id = Uuid::parse_str(&id_str).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        let user_id_str: String = row.try_get("user_id")?;
+        let user_id =
+            Uuid::parse_str(&user_id_str).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+
+        let created_at_str: String = row.try_get("created_at")?;
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?
+            .with_timezone(&Utc);
+
+        Ok(Transaction {
+            id,
+            user_id,
+            transaction_type: row.try_get("transaction_type")?,
+            amount: row.try_get("amount")?,
+            status: row.try_get("status")?,
+            tx_hash: row.try_get("tx_hash")?,
+            created_at,
+        })
+    }
+}
+
+// Keep the rest of your types unchanged...
+
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
-    pub wallet_address: String,
+    pub _wallet_address: String,
 }
 
 // Auth types
@@ -37,24 +160,6 @@ pub struct AuthResponse {
     pub user: User,
 }
 
-// Chat types
-#[derive(Debug, Clone, FromRow, Serialize)]
-pub struct ChatSession {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub title: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize)]
-pub struct Message {
-    pub id: Uuid,
-    pub session_id: Uuid,
-    pub content: String,
-    pub is_user: bool,
-    pub created_at: DateTime<Utc>,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct CreateSessionRequest {
     pub title: Option<String>,
@@ -71,16 +176,24 @@ pub struct MessageResponse {
     pub ai_message: Message,
 }
 
-// Payment types
-#[derive(Debug, Clone, FromRow, Serialize)]
-pub struct Transaction {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub transaction_type: String,
-    pub amount: Option<f64>,
-    pub status: String,
-    pub tx_hash: Option<String>,
-    pub created_at: DateTime<Utc>,
+// Ollama API types
+// #[derive(Debug, Serialize)]
+// pub struct OllamaRequest {
+//     pub model: String,
+//     pub messages: Vec<OllamaMessage>,
+//     pub stream: bool,
+// }
+//
+// #[derive(Debug, Serialize)]
+// pub struct OllamaMessage {
+//     pub role: String, // "user", "assistant", "system"
+//     pub content: String,
+// }
+
+#[derive(Debug, Deserialize)]
+pub struct OllamaResponseMessage {
+    pub _role: String,
+    pub _content: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,10 +244,10 @@ pub struct SolanaResponse<T> {
 #[derive(Debug, Deserialize)]
 pub struct SolanaTransactionData {
     pub unsigned_transaction: String, // Base64 encoded
-    pub from: Option<String>,
-    pub to: Option<String>,
-    pub amount: Option<f64>,
-    pub required_signers: Vec<String>,
+    pub _from: Option<String>,
+    pub _to: Option<String>,
+    pub _amount: Option<f64>,
+    pub _required_signers: Vec<String>,
     pub recent_blockhash: String,
 }
 
@@ -142,15 +255,15 @@ pub struct SolanaTransactionData {
 pub struct SolanaSwapData {
     pub unsigned_transaction: String,
     pub quote_info: QuoteInfo,
-    pub required_signers: Vec<String>,
-    pub recent_blockhash: String,
+    pub _required_signers: Vec<String>,
+    pub _recent_blockhash: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct QuoteInfo {
     pub expected_output: f64,
     pub price_impact: f64,
-    pub route_steps: u32,
+    pub _route_steps: u32,
 }
 
 #[derive(Debug, Deserialize)]

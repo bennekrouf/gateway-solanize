@@ -45,6 +45,25 @@ pub struct ChatConfig {
     pub max_sessions_per_user: u32,
     pub max_messages_per_session: u32,
     pub ai_provider: String,
+    pub ollama: OllamaConfig,
+    pub api_providers: std::collections::HashMap<String, ApiProviderConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OllamaConfig {
+    pub url: String,
+    pub model: String,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApiProviderConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    pub timeout_seconds: u64,
+    pub endpoint: String,
+    pub response_path: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -63,7 +82,7 @@ pub struct LoggingConfig {
 impl AppConfig {
     pub fn load() -> Result<Self, config::ConfigError> {
         let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "config.yaml".to_string());
-
+        
         config::Config::builder()
             .add_source(config::File::with_name(&config_path))
             .add_source(config::Environment::with_prefix("GATEWAY").separator("__"))

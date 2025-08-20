@@ -21,7 +21,7 @@ graph TB
 ## Features
 
 - **Wallet-First Authentication**: Solana wallet signature-based auth with JWT
-- **Chat System**: CRUD operations with AI integration hooks
+- **Chat System**: CRUD operations with Ollama AI integration
 - **Payment Gateway**: Orchestrates Solana transactions through dedicated microservice
 - **Modular Design**: Clean separation with potential microservice extraction
 - **Configuration-Driven**: All parameters in YAML
@@ -33,9 +33,18 @@ graph TB
 git clone <repo>
 cd solana-gateway
 
+# Install Ollama (if not already installed)
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Pull a model (choose one)
+ollama pull llama3.1        # Recommended: Latest Llama
+ollama pull llama2          # Alternative: Llama 2
+ollama pull codellama       # For code-related queries
+ollama pull mistral         # Faster, smaller model
+
 # Configure
 cp config.yaml.example config.yaml
-# Edit config.yaml with your settings
+# Edit config.yaml with your settings and chosen model
 
 # Run database migrations and start
 cargo run
@@ -51,8 +60,10 @@ cargo run
 ### Chat (JWT Required)
 - `POST /api/v1/chat/sessions` - Create chat session
 - `GET /api/v1/chat/sessions` - List user sessions
-- `POST /api/v1/chat/sessions/{id}/messages` - Send message
+- `POST /api/v1/chat/sessions/{id}/messages` - Send message (gets Ollama response)
 - `GET /api/v1/chat/sessions/{id}/messages` - Get session messages
+- `GET /api/v1/chat/health` - Check Ollama service health
+- `GET /api/v1/chat/models` - List available Ollama models
 
 ### Transactions (JWT Required)
 - `POST /api/v1/transactions/create` - Create transaction via Solana service
@@ -71,8 +82,10 @@ auth:
   challenge_expires_minutes: 5
 
 chat:
-  max_sessions_per_user: 100
-  ai_provider: "openai"
+  ai_provider: "ollama"
+  ollama_url: "http://localhost:11434"
+  ollama_model: "llama3.1"
+  ollama_timeout_seconds: 30
 
 payment:
   solana_service_url: "http://localhost:8001" # Solana microservice

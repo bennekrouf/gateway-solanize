@@ -21,7 +21,10 @@ auth:
 chat:
   max_sessions_per_user: 100
   max_messages_per_session: 1000
-  ai_provider: "placeholder" # openai, claude, placeholder
+  ai_provider: "ollama" # ollama, placeholder
+  ollama_url: "http://localhost:11434"
+  ollama_model: "llama3.1" # or llama2, codellama, mistral, etc.
+  ollama_timeout_seconds: 30
 
 payment:
   solana_service_url: "http://localhost:8000" # Solana CLI API Gateway

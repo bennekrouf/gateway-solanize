@@ -6,7 +6,8 @@ server:
 cors:
   allowed_origins: ["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000"]
   allowed_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
-  allowed_headers: ["Content-Type", "Authorization"]
+  # allowed_headers: ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"]
+  allowed_headers: ["*"]
   allow_credentials: true
 
 database:
@@ -21,7 +22,37 @@ auth:
 chat:
   max_sessions_per_user: 100
   max_messages_per_session: 1000
-  ai_provider: "openai" # placeholder
+  ai_provider: "cohere"
+  
+  ollama:
+    url: "http://localhost:11434"
+    model: "deepseek-r1:8b"
+    timeout_seconds: 30
+    
+  api_providers:
+    claude:
+      api_key: "${CLAUDE_API_KEY}"
+      base_url: "https://api.anthropic.com"
+      endpoint: "/v1/messages"
+      model: "claude-sonnet-4-20250514"
+      timeout_seconds: 30
+      response_path: "content.0.text"
+      
+    openai:
+      api_key: "your-openai-api-key"
+      base_url: "https://api.openai.com"
+      endpoint: "/v1/chat/completions"
+      model: "gpt-4"
+      timeout_seconds: 30
+      response_path: "choices.0.message.content"
+      
+    cohere:
+      api_key: "${COHERE_API_KEY}"
+      base_url: "https://api.cohere.ai"
+      endpoint: "/v1/chat"
+      model: "command-r-plus"
+      timeout_seconds: 30
+      response_path: "text"
 
 payment:
   solana_service_url: "http://localhost:8001" # Solana microservice

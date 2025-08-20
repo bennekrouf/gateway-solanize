@@ -48,7 +48,7 @@ pub async fn confirm_transaction(
 
 #[get("/balance/<wallet_address>")]
 pub async fn check_balance(
-    wallet_address: String,
+    wallet_address: &str,
     _user: User, // Require authentication
     config: &State<AppConfig>,
 ) -> AppResult<Json<serde_json::Value>> {
@@ -74,6 +74,8 @@ pub async fn health_check(config: &State<AppConfig>) -> AppResult<Json<serde_jso
         }
     })))
 }
+
+#[get("/history")]
 pub async fn get_history(
     user: User,
     pool: &State<SqlitePool>,

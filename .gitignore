@@ -1,1 +1,9 @@
 /target
+
+config.yaml
+gateway.db
+gateway.db-shm
+gateway.db-wal
+
+
+

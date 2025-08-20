@@ -33,7 +33,10 @@ auth:
 chat:
   max_sessions_per_user: 100
   max_messages_per_session: 1000
-  ai_provider: "test"
+  ai_provider: "ollama"
+  ollama_url: "http://localhost:11434"
+  ollama_model: "llama3.1"
+  ollama_timeout_seconds: 30
 payment:
   solana_network: "devnet"
   premium_price_sol: 0.1
