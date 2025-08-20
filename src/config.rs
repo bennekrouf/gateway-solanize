@@ -83,10 +83,26 @@ impl AppConfig {
     pub fn load() -> Result<Self, config::ConfigError> {
         let config_path = env::var("CONFIG_PATH").unwrap_or_else(|_| "config.yaml".to_string());
         
-        config::Config::builder()
+        let mut config = config::Config::builder()
             .add_source(config::File::with_name(&config_path))
-            .add_source(config::Environment::with_prefix("GATEWAY").separator("__"))
-            .build()?
-            .try_deserialize()
+            .add_source(config::Environment::with_prefix("").separator("__"))
+            .build()?;
+            
+        let mut app_config: AppConfig = config.try_deserialize()?;
+        
+        // Manually override API keys from environment
+        if let Ok(cohere_key) = env::var("COHERE_API_KEY") {
+            if let Some(cohere_config) = app_config.chat.api_providers.get_mut("cohere") {
+                cohere_config.api_key = cohere_key;
+            }
+        }
+        
+        if let Ok(claude_key) = env::var("CLAUDE_API_KEY") {
+            if let Some(claude_config) = app_config.chat.api_providers.get_mut("claude") {
+                claude_config.api_key = claude_key;
+            }
+        }
+        
+        Ok(app_config)
     }
 }

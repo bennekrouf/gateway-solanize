@@ -3,6 +3,7 @@ use rocket::{catchers, routes};
 use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
 use std::collections::HashMap;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use dotenv::dotenv;
 
 mod auth;
 mod chat;
@@ -34,6 +35,7 @@ enum Commands {
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::Error> {
+dotenv().ok();
     let cli = Cli::parse();
 
     let port = match cli.command {

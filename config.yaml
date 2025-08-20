@@ -47,7 +47,7 @@ chat:
       response_path: "choices.0.message.content"
       
     cohere:
-      api_key: "${COHERE_API_KEY}"
+      api_key: "placeholder"
       base_url: "https://api.cohere.ai"
       endpoint: "/v1/chat"
       model: "command-r-plus"
