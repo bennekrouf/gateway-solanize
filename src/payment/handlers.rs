@@ -7,7 +7,21 @@ use crate::{
     error::AppResult,
     payment::service::PaymentService,
     types::{
-        ConfirmTransactionRequest, CreateTransactionRequest, CreateTransactionResponse, Transaction,
+        ConfirmTransactionRequest,
+        CreateTransactionRequest,
+        CreateTransactionResponse,
+        PendingTransactionsResponse,
+        TokenPriceRequest,
+        TokenPriceResponse,
+        TokenSearchRequest,
+        TokenSearchResponse,
+        Transaction,
+        TransactionHistoryResponse,
+        // Add new request/response types
+        WalletHistoryRequest,
+        WalletPendingRequest,
+        WalletTokensRequest,
+        WalletTokensResponse,
     },
 };
 
@@ -75,6 +89,53 @@ pub async fn health_check(config: &State<AppConfig>) -> AppResult<Json<serde_jso
     })))
 }
 
+#[post("/trading-context")]
+pub async fn get_trading_context(
+    user: User,
+    config: &State<AppConfig>,
+) -> AppResult<Json<serde_json::Value>> {
+    let payment_service = PaymentService::new(config);
+
+    // Get all data AI needs for trading advice
+    let portfolio = payment_service
+        .get_wallet_tokens(&user.wallet_address)
+        .await?;
+
+    let history = payment_service
+        .get_wallet_transaction_history(&user.wallet_address, Some(50), Some(0))
+        .await?;
+
+    // Get prices for tokens in portfolio
+    let token_symbols: Vec<String> = portfolio.tokens.iter().map(|t| t.symbol.clone()).collect();
+
+    let prices = if !token_symbols.is_empty() {
+        Some(payment_service.get_token_prices(&token_symbols).await?)
+    } else {
+        None
+    };
+
+    Ok(Json(serde_json::json!({
+        "wallet_address": user.wallet_address,
+        "portfolio": portfolio,
+        "transaction_history": history,
+        "current_prices": prices,
+        "analysis_timestamp": chrono::Utc::now().to_rfc3339()
+    })))
+}
+
+#[post("/history", data = "<request>")]
+pub async fn get_wallet_history(
+    request: Json<WalletHistoryRequest>,
+    _user: User,
+    config: &State<AppConfig>,
+) -> AppResult<Json<TransactionHistoryResponse>> {
+    let payment_service = PaymentService::new(config);
+    let history = payment_service
+        .get_wallet_transaction_history(&request.wallet_address, request.limit, request.offset)
+        .await?;
+    Ok(Json(history))
+}
+
 #[get("/history")]
 pub async fn get_history(
     user: User,
@@ -91,4 +152,62 @@ pub async fn get_history(
     .await?;
 
     Ok(Json(transactions))
+}
+
+// NEW: Get pending transactions for a wallet
+#[post("/pending", data = "<request>")]
+pub async fn get_pending_transactions(
+    request: Json<WalletPendingRequest>,
+    _user: User, // Require authentication
+    config: &State<AppConfig>,
+) -> AppResult<Json<PendingTransactionsResponse>> {
+    let payment_service = PaymentService::new(config);
+    let pending = payment_service
+        .get_pending_transactions(&request.wallet_address)
+        .await?;
+
+    Ok(Json(pending))
+}
+
+// NEW: Get token prices
+#[post("/price", data = "<request>")]
+pub async fn get_token_price(
+    request: Json<TokenPriceRequest>,
+    _user: User, // Require authentication
+    config: &State<AppConfig>,
+) -> AppResult<Json<TokenPriceResponse>> {
+    let payment_service = PaymentService::new(config);
+    let prices = payment_service.get_token_prices(&request.tokens).await?;
+
+    Ok(Json(prices))
+}
+
+// NEW: Search tokens
+#[post("/tokens/search", data = "<request>")]
+pub async fn search_tokens(
+    request: Json<TokenSearchRequest>,
+    _user: User, // Require authentication
+    config: &State<AppConfig>,
+) -> AppResult<Json<TokenSearchResponse>> {
+    let payment_service = PaymentService::new(config);
+    let results = payment_service
+        .search_tokens(&request.query, request.limit)
+        .await?;
+
+    Ok(Json(results))
+}
+
+// NEW: Get wallet tokens with balances
+#[post("/wallet/tokens", data = "<request>")]
+pub async fn get_wallet_tokens(
+    request: Json<WalletTokensRequest>,
+    _user: User, // Require authentication
+    config: &State<AppConfig>,
+) -> AppResult<Json<WalletTokensResponse>> {
+    let payment_service = PaymentService::new(config);
+    let tokens = payment_service
+        .get_wallet_tokens(&request.wallet_address)
+        .await?;
+
+    Ok(Json(tokens))
 }

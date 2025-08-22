@@ -1,18 +1,21 @@
+use crate::types::TokenPriceResponse;
+use crate::types::TokenSearchResponse;
+use crate::types::TransactionHistoryResponse;
+use crate::types::WalletTokensResponse;
+use crate::{
+    config::AppConfig,
+    error::{AppError, AppResult},
+    types::{
+        CreateTransactionResponse, PendingTransactionsResponse, SolanaBalanceData,
+        SolanaBalanceRequest, SolanaCreateTransactionRequest, SolanaResponse, SolanaSubmitData,
+        SolanaSubmitRequest, SolanaSwapData, SolanaSwapRequest, SolanaTransactionData, Transaction,
+    },
+};
 use chrono::Utc;
 use rocket::State;
 use sqlx::SqlitePool;
 use std::time::Duration;
 use uuid::Uuid;
-
-use crate::{
-    config::AppConfig,
-    error::{AppError, AppResult},
-    types::{
-        CreateTransactionResponse, SolanaBalanceData, SolanaBalanceRequest,
-        SolanaCreateTransactionRequest, SolanaResponse, SolanaSubmitData, SolanaSubmitRequest,
-        SolanaSwapData, SolanaSwapRequest, SolanaTransactionData, Transaction,
-    },
-};
 
 pub struct PaymentService<'a> {
     config: &'a AppConfig,
@@ -160,7 +163,7 @@ impl<'a> PaymentService<'a> {
     }
 
     /// Prepare SOL transfer via Solana microservice
-    async fn prepare_sol_transfer(
+    pub async fn prepare_sol_transfer(
         &self,
         payer_pubkey: &str,
         to_address: &str,
@@ -216,7 +219,7 @@ impl<'a> PaymentService<'a> {
     }
 
     /// Prepare token swap via Solana microservice
-    async fn prepare_token_swap(
+    pub async fn prepare_token_swap(
         &self,
         payer_pubkey: &str,
         from_token: &str,
@@ -276,7 +279,7 @@ impl<'a> PaymentService<'a> {
     }
 
     /// Submit signed transaction to Solana microservice
-    async fn submit_transaction(&self, signed_transaction: &str) -> AppResult<SolanaSubmitData> {
+    pub async fn submit_transaction(&self, signed_transaction: &str) -> AppResult<SolanaSubmitData> {
         tracing::info!("Submitting signed transaction to Solana microservice");
 
         let request = SolanaSubmitRequest {
@@ -385,6 +388,196 @@ impl<'a> PaymentService<'a> {
         }
 
         Ok(())
+    }
+
+    /// Get transaction history for any wallet via Solana microservice
+    pub async fn get_wallet_transaction_history(
+        &self,
+        wallet_address: &str,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> AppResult<TransactionHistoryResponse> {
+        let request = serde_json::json!({
+            "wallet_address": wallet_address,
+            "limit": limit.unwrap_or(50),
+            "offset": offset.unwrap_or(0)
+        });
+
+        let url = format!(
+            "{}/api/v1/transactions/history",
+            self.config.payment.solana_service_url
+        );
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Solana service unavailable: {}", e)))?;
+
+        let solana_response: SolanaResponse<TransactionHistoryResponse> = response
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Invalid history response: {}", e)))?;
+
+        if !solana_response.success {
+            return Err(AppError::Internal(
+                solana_response
+                    .error
+                    .unwrap_or_else(|| "History fetch failed".to_string()),
+            ));
+        }
+
+        solana_response
+            .data
+            .ok_or_else(|| AppError::Internal("Missing history data".to_string()))
+    }
+
+    /// Get pending transactions for a wallet
+    pub async fn get_pending_transactions(
+        &self,
+        wallet_address: &str,
+    ) -> AppResult<PendingTransactionsResponse> {
+        let request = serde_json::json!({
+            "wallet_address": wallet_address
+        });
+
+        let url = format!(
+            "{}/api/v1/transactions/pending",
+            self.config.payment.solana_service_url
+        );
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Solana service unavailable: {}", e)))?;
+
+        let solana_response: SolanaResponse<PendingTransactionsResponse> = response
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Invalid pending response: {}", e)))?;
+
+        if !solana_response.success {
+            return Err(AppError::Internal(solana_response.error.unwrap_or_else(
+                || "Pending transactions fetch failed".to_string(),
+            )));
+        }
+
+        solana_response
+            .data
+            .ok_or_else(|| AppError::Internal("Missing pending transactions data".to_string()))
+    }
+
+    /// Get token prices via Solana microservice
+    pub async fn get_token_prices(&self, tokens: &[String]) -> AppResult<TokenPriceResponse> {
+        let request = serde_json::json!({
+            "tokens": tokens
+        });
+
+        let url = format!("{}/api/v1/price", self.config.payment.solana_service_url);
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Solana service unavailable: {}", e)))?;
+
+        let solana_response: SolanaResponse<TokenPriceResponse> = response
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Invalid price response: {}", e)))?;
+
+        if !solana_response.success {
+            return Err(AppError::Internal(
+                solana_response
+                    .error
+                    .unwrap_or_else(|| "Price fetch failed".to_string()),
+            ));
+        }
+
+        solana_response
+            .data
+            .ok_or_else(|| AppError::Internal("Missing price data".to_string()))
+    }
+
+    /// Search tokens via Solana microservice
+    pub async fn search_tokens(
+        &self,
+        query: &str,
+        limit: Option<u32>,
+    ) -> AppResult<TokenSearchResponse> {
+        let request = serde_json::json!({
+            "query": query,
+            "limit": limit.unwrap_or(20)
+        });
+
+        let url = format!(
+            "{}/api/v1/tokens/search",
+            self.config.payment.solana_service_url
+        );
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Solana service unavailable: {}", e)))?;
+
+        let solana_response: SolanaResponse<TokenSearchResponse> = response
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Invalid search response: {}", e)))?;
+
+        if !solana_response.success {
+            return Err(AppError::Internal(
+                solana_response
+                    .error
+                    .unwrap_or_else(|| "Token search failed".to_string()),
+            ));
+        }
+
+        solana_response
+            .data
+            .ok_or_else(|| AppError::Internal("Missing search data".to_string()))
+    }
+
+    /// Get wallet tokens with balances via Solana microservice
+    pub async fn get_wallet_tokens(&self, wallet_address: &str) -> AppResult<WalletTokensResponse> {
+        let request = serde_json::json!({
+            "wallet_address": wallet_address
+        });
+
+        let url = format!(
+            "{}/api/v1/wallet/tokens",
+            self.config.payment.solana_service_url
+        );
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Solana service unavailable: {}", e)))?;
+
+        let solana_response: SolanaResponse<WalletTokensResponse> = response
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Invalid wallet tokens response: {}", e)))?;
+
+        if !solana_response.success {
+            return Err(AppError::Internal(
+                solana_response
+                    .error
+                    .unwrap_or_else(|| "Wallet tokens fetch failed".to_string()),
+            ));
+        }
+
+        solana_response
+            .data
+            .ok_or_else(|| AppError::Internal("Missing wallet tokens data".to_string()))
     }
 
     /// Health check for Solana microservice

@@ -133,8 +133,6 @@ impl<'r> FromRow<'r, sqlx::sqlite::SqliteRow> for Transaction {
     }
 }
 
-// Keep the rest of your types unchanged...
-
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
     pub _wallet_address: String,
@@ -165,30 +163,66 @@ pub struct CreateSessionRequest {
     pub title: Option<String>,
 }
 
+// Types for the validation flow
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
     pub content: String,
+    pub action_response: Option<ActionResponse>,
+    pub signed_transaction: Option<String>,
+    pub transaction_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActionResponse {
+    pub action_id: String,
+    pub approved: bool,
+    pub modified_params: Option<serde_json::Value>, // User can modify parameters
 }
 
 #[derive(Debug, Serialize)]
 pub struct MessageResponse {
     pub user_message: Message,
     pub ai_message: Message,
+    pub proposed_actions: Option<ProposedActions>,
+    pub prepared_transaction: Option<PreparedTransaction>,
 }
 
-// Ollama API types
-// #[derive(Debug, Serialize)]
-// pub struct OllamaRequest {
-//     pub model: String,
-//     pub messages: Vec<OllamaMessage>,
-//     pub stream: bool,
-// }
-//
-// #[derive(Debug, Serialize)]
-// pub struct OllamaMessage {
-//     pub role: String, // "user", "assistant", "system"
-//     pub content: String,
-// }
+#[derive(Debug, Serialize)]
+pub struct ProposedActions {
+    pub action_id: String,
+    pub intent_description: String,
+    pub confidence_score: f64,
+    pub endpoints_to_call: Vec<ProposedEndpoint>,
+    pub estimated_cost: Option<f64>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProposedEndpoint {
+    pub endpoint: String,
+    pub method: String,
+    pub description: String,
+    pub params: serde_json::Value,
+    pub risk_level: String, // "none", "low", "medium", "high"
+}
+
+#[derive(Debug)]
+pub enum ActionExecutionResult {
+    PreparedTransaction(PreparedTransaction),
+    DataResponse(String),
+}
+
+#[derive(Debug, Serialize)]
+pub struct PreparedTransaction {
+    pub transaction_id: String,
+    pub transaction_type: String, // "transfer", "swap", etc.
+    pub unsigned_transaction: String,
+    pub from_address: String,
+    pub to_address: String,
+    pub amount: f64,
+    pub token: String,
+    pub fee_estimate: Option<f64>,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct OllamaResponseMessage {
@@ -290,3 +324,128 @@ pub struct Claims {
     pub exp: usize,
     pub iat: usize,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct WalletHistoryRequest {
+    pub wallet_address: String,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WalletPendingRequest {
+    pub wallet_address: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TokenPriceRequest {
+    pub tokens: Vec<String>, // Array of token symbols or mint addresses
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TokenSearchRequest {
+    pub query: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WalletTokensRequest {
+    pub wallet_address: String,
+}
+
+// NEW: Response types from Solana microservice
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TransactionHistoryResponse {
+    pub transactions: Vec<WalletTransaction>,
+    pub total_count: Option<u32>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct WalletTransaction {
+    pub signature: String,
+    pub slot: u64,
+    pub timestamp: Option<i64>,
+    pub status: String, // "confirmed", "finalized", "failed"
+    pub fee: Option<u64>,
+    pub transaction_type: String, // "transfer", "swap", "program_interaction"
+    pub amount: Option<f64>,
+    pub token: Option<String>,
+    pub from_address: Option<String>,
+    pub to_address: Option<String>,
+    pub memo: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PendingTransactionsResponse {
+    pub pending_transactions: Vec<PendingTransaction>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PendingTransaction {
+    pub signature: String,
+    pub timestamp: i64,
+    pub status: String,                           // "pending", "processing"
+    pub estimated_confirmation_time: Option<u32>, // seconds
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TokenPriceResponse {
+    pub prices: Vec<TokenPrice>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TokenPrice {
+    pub symbol: String,
+    pub mint_address: String,
+    pub price_usd: f64,
+    pub market_cap: Option<f64>,
+    pub volume_24h: Option<f64>,
+    pub price_change_24h: Option<f64>,
+    pub last_updated: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TokenSearchResponse {
+    pub tokens: Vec<TokenInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TokenInfo {
+    pub symbol: String,
+    pub name: String,
+    pub mint_address: String,
+    pub decimals: u8,
+    pub logo_uri: Option<String>,
+    pub verified: bool,
+    pub daily_volume: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct WalletTokensResponse {
+    pub tokens: Vec<WalletToken>,
+    pub total_value_usd: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct WalletToken {
+    pub mint_address: String,
+    pub symbol: String,
+    pub name: String,
+    pub balance: f64,
+    pub decimals: u8,
+    pub price_usd: Option<f64>,
+    pub value_usd: Option<f64>,
+    pub logo_uri: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TransactionRequest {
+    pub tx_type: String,        // "transfer", "swap", etc.
+    pub from_token: String,     // "SOL", "USDC", etc.
+    pub to_token: String,       // For swaps
+    pub to_address: String,     // Recipient address
+    pub amount: f64,            // Amount to transfer/swap
+}
+
+

@@ -49,7 +49,7 @@ pub async fn send_message(
 ) -> AppResult<Json<MessageResponse>> {
     let chat_service = ChatService::new(config);
     let response = chat_service
-        .send_message(session_id, &user.id, &request.content, pool)
+        .send_message_with_transactions(session_id, &user.id, &user.wallet_address, &request, pool)
         .await?;
 
     Ok(Json(response))

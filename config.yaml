@@ -50,12 +50,12 @@ chat:
       api_key: "placeholder"
       base_url: "https://api.cohere.ai"
       endpoint: "/v1/chat"
-      model: "command-r-plus"
+      model: "command-r7b-12-2024"  # or "command-r-08-2024"
       timeout_seconds: 30
       response_path: "text"
 
 payment:
-  solana_service_url: "http://localhost:8001" # Solana microservice
+  solana_service_url: "http://localhost:8000" # Solana microservice
   premium_price_sol: 0.1
   timeout_seconds: 30
 

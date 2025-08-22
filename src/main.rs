@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
+use dotenv::dotenv;
 use rocket::{catchers, routes};
 use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
 use std::collections::HashMap;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use dotenv::dotenv;
 
 mod auth;
 mod chat;
@@ -12,10 +12,12 @@ mod db;
 mod error;
 mod payment;
 mod types;
+mod api;
+mod solana;
 
-use config::AppConfig;
-// use error::AppResult;
 use auth::service::ChallengeStore;
+use config::AppConfig;
+use api::{auth, chat, wallet};
 
 #[derive(Parser)]
 #[command(name = "gateway-solanize")]
@@ -35,7 +37,7 @@ enum Commands {
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::Error> {
-dotenv().ok();
+    dotenv().ok();
     let cli = Cli::parse();
 
     let port = match cli.command {
@@ -118,13 +120,24 @@ dotenv().ok();
             ],
         )
         .mount(
+            "/api/v1/wallet",  // Clean frontend-facing wallet endpoints
+            routes![
+                wallet::get_balance,
+                wallet::get_tokens,
+                wallet::get_history,
+                wallet::health_check,
+            ],
+        )
+        .mount(
             "/api/v1/transactions",
             routes![
-                payment::handlers::create_transaction,
-                payment::handlers::confirm_transaction,
-                payment::handlers::get_history,
+                // Keep only read-only endpoints for UI context:
                 payment::handlers::check_balance,
-                payment::handlers::health_check
+                payment::handlers::get_wallet_tokens, // For portfolio display
+                payment::handlers::health_check,
+                payment::handlers::get_wallet_history,
+                payment::handlers::get_history,
+                // Remove: create_transaction, confirm_transaction, get_history
             ],
         )
         .register(
