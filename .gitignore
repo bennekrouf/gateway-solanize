@@ -3,3 +3,5 @@
 ./gateway.*
 
 .env
+config.yaml
+gateway.db

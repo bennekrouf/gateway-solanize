@@ -116,7 +116,7 @@ impl<'a> Api0Service<'a> {
                 endpoints_to_call: vec![ProposedEndpoint {
                     endpoint: "/solana/balance".to_string(),
                     method: "POST".to_string(),
-                    description: "Get current SOL balance".to_string(),
+                    description: "FAKE Need API0 call - Get current SOL balance".to_string(),
                     params: serde_json::json!({
                         "pubkey": wallet_address
                     }),
