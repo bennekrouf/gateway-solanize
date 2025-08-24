@@ -39,6 +39,7 @@ pub async fn get_sessions(
     Ok(Json(sessions))
 }
 
+// UPDATED: This is the main endpoint that handles API0 integration
 #[post("/sessions/<session_id>/messages", data = "<request>")]
 pub async fn send_message(
     session_id: Uuid,
@@ -48,6 +49,7 @@ pub async fn send_message(
     config: &State<AppConfig>,
 ) -> AppResult<Json<MessageResponse>> {
     let chat_service = ChatService::new(config);
+    // This method now handles API0 integration properly
     let response = chat_service
         .send_message_with_transactions(session_id, &user.id, &user.wallet_address, &request, pool)
         .await?;
@@ -137,9 +139,9 @@ pub async fn delete_session(
     session_id: Uuid,
     user: User,
     pool: &State<SqlitePool>,
-    config: &State<AppConfig>, // Add this
+    config: &State<AppConfig>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let chat_service = ChatService::new(config); // Use injected config
+    let chat_service = ChatService::new(config);
     chat_service
         .delete_session(session_id, &user.id, pool)
         .await?;
@@ -149,3 +151,4 @@ pub async fn delete_session(
         "session_id": session_id
     })))
 }
+

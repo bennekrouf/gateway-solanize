@@ -1,3 +1,4 @@
+// src/main.rs - Updated with API0-centric architecture
 use clap::{Parser, Subcommand};
 use dotenv::dotenv;
 use rocket::{catchers, routes};
@@ -5,19 +6,19 @@ use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
 use std::collections::HashMap;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+// mod api;
 mod auth;
 mod chat;
 mod config;
 mod db;
 mod error;
 mod payment;
-mod types;
-mod api;
 mod solana;
+mod types;
 
+// use api::{auth, chat, wallet};
 use auth::service::ChallengeStore;
 use config::AppConfig;
-use api::{auth, chat, wallet};
 
 #[derive(Parser)]
 #[command(name = "gateway-solanize")]
@@ -51,7 +52,10 @@ async fn main() -> Result<(), rocket::Error> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("Starting Solana Gateway on port {}", port);
+    tracing::info!(
+        "Starting Solana Gateway with API0 integration on port {}",
+        port
+    );
 
     // Load configuration and override port
     let mut config = AppConfig::load().expect("Failed to load configuration");
@@ -73,15 +77,6 @@ async fn main() -> Result<(), rocket::Error> {
 
     // Setup CORS
     let allowed_origins = AllowedOrigins::some_exact(&config.cors.allowed_origins);
-    let allowed_headers: Vec<&str> = config
-        .cors
-        .allowed_headers
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
-
-    tracing::info!("Processed headers for CORS: {:?}", allowed_headers);
-
     let cors = CorsOptions {
         allowed_origins,
         allowed_methods: config
@@ -99,6 +94,7 @@ async fn main() -> Result<(), rocket::Error> {
 
     let _rocket = rocket::build()
         .configure(rocket::Config::figment().merge(("port", port)))
+        // Authentication endpoints
         .mount(
             "/api/v1/auth",
             routes![
@@ -107,37 +103,37 @@ async fn main() -> Result<(), rocket::Error> {
                 auth::handlers::refresh
             ],
         )
+        // MAIN INTERFACE: Chat with API0 integration
         .mount(
             "/api/v1/chat",
             routes![
                 chat::handlers::create_session,
                 chat::handlers::get_sessions,
-                chat::handlers::send_message,
+                chat::handlers::send_message, // This handles ALL Solana operations via API0
                 chat::handlers::get_messages,
                 chat::handlers::chat_health,
                 chat::handlers::delete_session,
                 chat::handlers::list_models
             ],
         )
-        .mount(
-            "/api/v1/wallet",  // Clean frontend-facing wallet endpoints
-            routes![
-                wallet::get_balance,
-                wallet::get_tokens,
-                wallet::get_history,
-                wallet::health_check,
-            ],
-        )
+        // Clean wallet endpoints for UI context (read-only)
+        // .mount(
+        //     "/api/v1/wallet",
+        //     routes![
+        //         wallet::get_balance, // Direct call for UI balance display
+        //         wallet::get_tokens,  // Direct call for UI portfolio display
+        //         wallet::get_history, // Direct call for UI history display
+        //         wallet::health_check,
+        //     ],
+        // )
+        // Simplified payment endpoints (local transaction management only)
         .mount(
             "/api/v1/transactions",
             routes![
-                // Keep only read-only endpoints for UI context:
-                payment::handlers::check_balance,
-                payment::handlers::get_wallet_tokens, // For portfolio display
+                payment::handlers::create_transaction, // For premium upgrades etc.
+                payment::handlers::confirm_transaction, // For confirming payments
+                payment::handlers::get_history,        // Local transaction history
                 payment::handlers::health_check,
-                payment::handlers::get_wallet_history,
-                payment::handlers::get_history,
-                // Remove: create_transaction, confirm_transaction, get_history
             ],
         )
         .register(
@@ -158,3 +154,25 @@ async fn main() -> Result<(), rocket::Error> {
 
     Ok(())
 }
+
+// NOTE: The following endpoints have been REMOVED and should be accessed via chat:
+//
+// REMOVED from /api/v1/transactions:
+// - check_balance -> Chat: "What's my balance?"
+// - get_wallet_tokens -> Chat: "Show my portfolio"
+// - get_wallet_history -> Chat: "Show my transaction history"
+// - get_pending_transactions -> Chat: "Any pending transactions?"
+// - get_token_price -> Chat: "What's the price of SOL?"
+// - search_tokens -> Chat: "Find RAY token"
+// - get_trading_context -> Automatically included in chat context
+//
+// ALL SOLANA OPERATIONS NOW GO THROUGH:
+// POST /api/v1/chat/sessions/{id}/messages
+//
+// This endpoint:
+// 1. Analyzes user message with API0
+// 2. Proposes actions with risk assessment
+// 3. Requires user approval
+// 4. Executes via Solana microservice
+// 5. Returns prepared transactions for signing
+// 6. Handles signed transaction submission

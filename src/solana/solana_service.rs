@@ -2,10 +2,9 @@ use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
     types::{
-        SolanaBalanceData, SolanaBalanceRequest, SolanaResponse,
-        WalletTokensResponse, TransactionHistoryResponse,
-        SolanaCreateTransactionRequest, SolanaTransactionData,
-        SolanaSubmitRequest, SolanaSubmitData,
+        SolanaBalanceData, SolanaBalanceRequest, SolanaCreateTransactionRequest, SolanaResponse,
+        SolanaSubmitData, SolanaSubmitRequest, SolanaTransactionData, TransactionHistoryResponse,
+        WalletTokensResponse,
     },
 };
 use std::time::Duration;
@@ -62,7 +61,10 @@ impl<'a> SolanaService<'a> {
             "pubkey": wallet_address
         });
 
-        let url = format!("{}/api/v1/wallet/tokens", self.config.payment.solana_service_url);
+        let url = format!(
+            "{}/api/v1/wallet/tokens",
+            self.config.payment.solana_service_url
+        );
         let response = self
             .client
             .post(&url)
@@ -101,7 +103,10 @@ impl<'a> SolanaService<'a> {
             amount,
         };
 
-        let url = format!("{}/api/v1/transaction/prepare", self.config.payment.solana_service_url);
+        let url = format!(
+            "{}/api/v1/transaction/prepare",
+            self.config.payment.solana_service_url
+        );
         let response = self
             .client
             .post(&url)
@@ -130,12 +135,18 @@ impl<'a> SolanaService<'a> {
         Ok(data.unsigned_transaction)
     }
 
-    pub async fn submit_transaction(&self, signed_transaction: &str) -> AppResult<SolanaSubmitData> {
+    pub async fn submit_transaction(
+        &self,
+        signed_transaction: &str,
+    ) -> AppResult<SolanaSubmitData> {
         let request = SolanaSubmitRequest {
             signed_transaction: signed_transaction.to_string(),
         };
 
-        let url = format!("{}/api/v1/transaction/submit", self.config.payment.solana_service_url);
+        let url = format!(
+            "{}/api/v1/transaction/submit",
+            self.config.payment.solana_service_url
+        );
         let response = self
             .client
             .post(&url)
@@ -170,5 +181,45 @@ impl<'a> SolanaService<'a> {
         }
     }
 
-    // Add other microservice methods as needed...
+    pub async fn get_transaction_history(
+        &self,
+        wallet_address: &str,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> AppResult<TransactionHistoryResponse> {
+        let request = serde_json::json!({
+            "pubkey": wallet_address,
+            "limit": limit.unwrap_or(50),
+            "before": null // You might want to handle pagination properly
+        });
+
+        let url = format!(
+            "{}/solana/transactions/history",
+            self.config.payment.solana_service_url
+        );
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Solana service unavailable: {}", e)))?;
+
+        let solana_response: SolanaResponse<TransactionHistoryResponse> = response
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Invalid history response: {}", e)))?;
+
+        if !solana_response.success {
+            return Err(AppError::Internal(
+                solana_response
+                    .error
+                    .unwrap_or_else(|| "History fetch failed".to_string()),
+            ));
+        }
+
+        solana_response
+            .data
+            .ok_or_else(|| AppError::Internal("Missing history data".to_string()))
+    }
 }

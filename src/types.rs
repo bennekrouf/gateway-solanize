@@ -441,11 +441,16 @@ pub struct WalletToken {
 
 #[derive(Debug, Clone)]
 pub struct TransactionRequest {
-    pub tx_type: String,        // "transfer", "swap", etc.
-    pub from_token: String,     // "SOL", "USDC", etc.
-    pub to_token: String,       // For swaps
-    pub to_address: String,     // Recipient address
-    pub amount: f64,            // Amount to transfer/swap
+    pub tx_type: String,    // "transfer", "swap", etc.
+    pub from_token: String, // "SOL", "USDC", etc.
+    pub to_token: String,   // For swaps
+    pub to_address: String, // Recipient address
+    pub amount: f64,        // Amount to transfer/swap
 }
 
-
+#[derive(Debug, Serialize)]
+pub struct WalletBalanceResponse {
+    pub wallet_address: String,
+    pub balance: f64,
+    pub token: String,
+}
