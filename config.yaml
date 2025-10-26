@@ -23,6 +23,7 @@ chat:
   max_sessions_per_user: 100
   max_messages_per_session: 1000
   ai_provider: "cohere"
+  api0_key: "${API0_KEY}"
   
   ollama:
     url: "http://localhost:11434"

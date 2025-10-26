@@ -3,8 +3,26 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+impl RiskLevel {
+    pub fn from_string(s: &str) -> Self {
+        match s {
+            "Low" => RiskLevel::Low,
+            "Medium" => RiskLevel::Medium,
+            "High" => RiskLevel::High,
+            _ => RiskLevel::Medium, // Default fallback
+        }
+    }
+}
+
 // Custom User struct with manual FromRow implementation
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: Uuid,
     pub wallet_address: String,
@@ -203,7 +221,7 @@ pub struct ProposedEndpoint {
     pub method: String,
     pub description: String,
     pub params: serde_json::Value,
-    pub risk_level: String, // "none", "low", "medium", "high"
+    pub risk_level: RiskLevel, // Change from String to RiskLevel
 }
 
 #[derive(Debug)]

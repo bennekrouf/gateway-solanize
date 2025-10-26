@@ -12,12 +12,12 @@ use crate::{
     types::{ChatSession, Message, MessageResponse},
 };
 
+use crate::types::ActionExecutionResult;
 use crate::types::ActionResponse;
 use crate::types::PreparedTransaction;
 use crate::types::ProposedActions;
 use crate::types::ProposedEndpoint;
 use crate::types::SendMessageRequest;
-use crate::types::{ActionExecutionResult, RiskLevel};
 
 // Import the new API0 service
 use super::api0_service::{Api0Service, EndpointExecutor};
@@ -592,7 +592,7 @@ impl<'a> ChatService<'a> {
                 "pubkey": wallet_address,
                 "limit": 20
             }),
-            risk_level: RiskLevel::Low,
+            risk_level: "none".to_string(),
         };
 
         let portfolio_result = self

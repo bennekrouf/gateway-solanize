@@ -3,14 +3,15 @@ use rocket::{
     http::Status,
     request::{FromRequest, Outcome},
 };
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
     auth::service::AuthService, config::AppConfig, error::AppError, types::User as UserType,
 };
-
 // Request guard for JWT authentication
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User(pub UserType);
 
 impl std::ops::Deref for User {

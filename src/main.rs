@@ -93,7 +93,15 @@ async fn main() -> Result<(), rocket::Error> {
     .expect("Failed to create CORS configuration");
 
     let _rocket = rocket::build()
-        .configure(rocket::Config::figment().merge(("port", port)))
+        .configure(
+            rocket::Config::figment().merge((
+                "port",
+                std::env::var("ROCKET_PORT")
+                    .expect("ROCKET_PORT environment variable is required")
+                    .parse::<u16>()
+                    .expect("ROCKET_PORT must be a valid port number"),
+            )),
+        )
         // Authentication endpoints
         .mount(
             "/api/v1/auth",

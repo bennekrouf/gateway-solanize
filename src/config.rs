@@ -45,6 +45,7 @@ pub struct ChatConfig {
     pub max_sessions_per_user: u32,
     pub max_messages_per_session: u32,
     pub ai_provider: String,
+    pub api0_key: String,
     pub ollama: OllamaConfig,
     pub api_providers: std::collections::HashMap<String, ApiProviderConfig>,
 }

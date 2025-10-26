@@ -1,8 +1,9 @@
 // src/chat/api0_service.rs
 use crate::{
+    auth::User,
     config::AppConfig,
     error::{AppError, AppResult},
-    types::{ProposedActions, ProposedEndpoint},
+    types::{ProposedActions, ProposedEndpoint, RiskLevel},
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -15,13 +16,17 @@ pub struct Api0Request {
 
 #[derive(Debug, Deserialize)]
 pub struct Api0Response {
-    pub intent_detected: bool,
-    pub intent_type: String,
-    pub confidence_score: f64,
-    pub extracted_parameters: serde_json::Value,
-    pub proposed_endpoints: Vec<Api0Endpoint>,
-    pub estimated_cost: Option<f64>,
-    pub warnings: Vec<String>,
+    pub endpoint_id: String,
+    pub endpoint_description: String,
+    pub parameters: Vec<Api0Parameter>,
+    pub raw_json: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Api0Parameter {
+    pub name: String,
+    pub description: String,
+    pub value: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,54 +53,87 @@ impl<'a> Api0Service<'a> {
         Self { config, client }
     }
 
+    fn map_api0_to_endpoint(
+        &self,
+        api0_response: &Api0Response,
+        user_context: &User,
+    ) -> Result<ProposedEndpoint, AppError> {
+        let params_json = serde_json::to_value(&api0_response.parameters)
+            .map_err(|e| AppError::Validation(format!("Failed to serialize parameters: {}", e)))?;
+
+        Ok(ProposedEndpoint {
+            endpoint: api0_response.endpoint_id.clone(),
+            method: "POST".to_string(),
+            description: api0_response.endpoint_description.clone(),
+            params: params_json,
+            risk_level: RiskLevel::Medium,
+        })
+    }
+
     pub async fn analyze_message(
         &self,
         message: &str,
         user_context: &serde_json::Value,
     ) -> AppResult<Option<ProposedActions>> {
-        // TODO: Replace with actual API0.ai call when ready
-        /*
-        let request = Api0Request {
-            message: message.to_string(),
-            user_context: user_context.clone(),
-        };
-
         let response = self
             .client
-            .post("https://api0.ai/analyze")
-            .json(&request)
+            .post("https://gateway.api0.ai/api/analyze")
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.config.chat.api0_key),
+            )
+            .json(&serde_json::json!({
+                "sentence": message
+            }))
             .send()
             .await
             .map_err(|e| AppError::Internal(format!("API0 service unavailable: {}", e)))?;
 
-        let api0_response: Api0Response = response
-            .json()
-            .await
-            .map_err(|e| AppError::Internal(format!("Invalid API0 response: {}", e)))?;
+        if !response.status().is_success() {
+            return Err(AppError::Internal(format!(
+                "API0 service error: {}",
+                response.status()
+            )));
+        }
 
-        if !api0_response.intent_detected {
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to read API0 response: {}", e)))?;
+
+        tracing::info!("API0 raw response: {}", response_text);
+
+        let api0_responses: Vec<Api0Response> =
+            serde_json::from_str(&response_text).map_err(|e| {
+                AppError::Internal(format!(
+                    "Invalid API0 response JSON: {} - Raw: {}",
+                    e, response_text
+                ))
+            })?;
+
+        if api0_responses.is_empty() {
             return Ok(None);
         }
 
+        // Take the first endpoint suggestion
+        let api0_response = &api0_responses[0];
+
+        // Map API0 response to our internal format
+        let user: crate::auth::User = serde_json::from_value(user_context.clone())
+            .map_err(|e| AppError::Validation(format!("Invalid user context: {}", e)))?;
+
+        let proposed_endpoint = self.map_api0_to_endpoint(&api0_response, &user)?;
+
         let proposed_actions = ProposedActions {
             action_id: uuid::Uuid::new_v4().to_string(),
-            intent_description: self.get_intent_description(&api0_response.intent_type),
-            confidence_score: api0_response.confidence_score,
-            endpoints_to_call: api0_response
-                .proposed_endpoints
-                .into_iter()
-                .map(|ep| self.map_to_proposed_endpoint(ep))
-                .collect(),
-            estimated_cost: api0_response.estimated_cost,
-            warnings: api0_response.warnings,
+            intent_description: api0_response.endpoint_description.clone(),
+            confidence_score: 0.95, // API0 doesn't return confidence, use high default
+            endpoints_to_call: vec![proposed_endpoint],
+            estimated_cost: None,
+            warnings: vec![],
         };
 
         Ok(Some(proposed_actions))
-        */
-
-        // Placeholder implementation until API0 is ready
-        self.placeholder_intent_detection(message, user_context)
-            .await
     }
 
     // Placeholder until API0 is ready - maps common patterns to endpoints
@@ -120,7 +158,7 @@ impl<'a> Api0Service<'a> {
                     params: serde_json::json!({
                         "pubkey": wallet_address
                     }),
-                    risk_level: "none".to_string(),
+                    risk_level: RiskLevel::Low,
                 }],
                 estimated_cost: None,
                 warnings: vec![],
@@ -143,7 +181,7 @@ impl<'a> Api0Service<'a> {
                     params: serde_json::json!({
                         "pubkey": wallet_address
                     }),
-                    risk_level: "none".to_string(),
+                    risk_level: RiskLevel::Low,
                 }],
                 estimated_cost: None,
                 warnings: vec![],
@@ -173,7 +211,7 @@ impl<'a> Api0Service<'a> {
                         "to_address": recipient,
                         "amount": amount
                     }),
-                    risk_level: "high".to_string(),
+                    risk_level: RiskLevel::High,
                 }],
                 estimated_cost: Some(0.000005),
                 warnings: vec![
@@ -209,7 +247,7 @@ impl<'a> Api0Service<'a> {
                         "to_token": to_token,
                         "amount": amount
                     }),
-                    risk_level: "medium".to_string(),
+                    risk_level: RiskLevel::Medium,
                 }],
                 estimated_cost: Some(0.000010),
                 warnings: vec![
@@ -236,7 +274,7 @@ impl<'a> Api0Service<'a> {
                         "pubkey": wallet_address,
                         "limit": 20
                     }),
-                    risk_level: "none".to_string(),
+                    risk_level: RiskLevel::Low,
                 }],
                 estimated_cost: None,
                 warnings: vec![],
@@ -260,7 +298,7 @@ impl<'a> Api0Service<'a> {
                     params: serde_json::json!({
                         "token": token
                     }),
-                    risk_level: "none".to_string(),
+                    risk_level: RiskLevel::Low,
                 }],
                 estimated_cost: None,
                 warnings: vec![],
@@ -341,7 +379,7 @@ impl<'a> Api0Service<'a> {
             method: api0_endpoint.method,
             description: api0_endpoint.description,
             params: api0_endpoint.params,
-            risk_level: api0_endpoint.risk_level,
+            risk_level: RiskLevel::from_string(&api0_endpoint.risk_level),
         }
     }
 }
