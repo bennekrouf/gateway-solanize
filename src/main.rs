@@ -30,10 +30,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     #[command(alias = "server")]
-    Serve {
-        #[arg(long, default_value_t = 5000)]
-        port: u16,
-    },
+    Serve,
 }
 
 #[rocket::main]
@@ -41,25 +38,16 @@ async fn main() -> Result<(), rocket::Error> {
     dotenv().ok();
     let cli = Cli::parse();
 
-    let port = match cli.command {
-        Some(Commands::Serve { port }) => port,
-        None => 5000,
-    };
-
     // Initialize tracing
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new("info"))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!(
-        "Starting Solana Gateway with API0 integration on port {}",
-        port
-    );
+    tracing::info!("Starting Solana Gateway with API0 integration on port ",);
 
     // Load configuration and override port
     let mut config = AppConfig::load().expect("Failed to load configuration");
-    config.server.port = port;
 
     // Setup database
     let pool = db::setup_database(&config.database.url)
@@ -156,9 +144,34 @@ async fn main() -> Result<(), rocket::Error> {
         .manage(pool)
         .manage(config)
         .manage(challenge_store)
-        .attach(cors)
-        .launch()
-        .await?;
+        .attach(cors);
+    // .launch()
+    // .await?;
+
+    let rocket = _rocket;
+
+    // Setup graceful shutdown
+    let (tx, rx) = rocket::tokio::sync::oneshot::channel();
+
+    rocket::tokio::spawn(async move {
+        rocket::tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for ctrl+c");
+        tracing::info!("Received shutdown signal");
+        let _ = tx.send(());
+    });
+
+    let handle = rocket.launch();
+
+    rocket::tokio::select! {
+        result = handle => {
+            result?;
+        }
+        _ = rx => {
+            tracing::info!("Graceful shutdown initiated");
+            // The rocket will shutdown when the select completes
+        }
+    }
 
     Ok(())
 }
