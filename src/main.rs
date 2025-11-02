@@ -4,7 +4,6 @@ use dotenv::dotenv;
 use rocket::{catchers, routes};
 use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
 use std::collections::HashMap;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod auth;
 mod chat;
@@ -16,9 +15,10 @@ mod payment;
 mod solana;
 mod types;
 
-// use api::{auth, chat, wallet};
 use auth::service::ChallengeStore;
 use config::AppConfig;
+use graflog::app_log;
+use graflog::init_logging;
 
 #[derive(Parser)]
 #[command(name = "gateway-solanize")]
@@ -38,12 +38,7 @@ async fn main() -> Result<(), rocket::Error> {
     dotenv().ok();
     let cli = Cli::parse();
 
-    init_logging!(
-        &config.logging.format,
-        "/tmp/solanize.log",
-        "solanize",
-        "gateway"
-    );
+    init_logging!("/var/log/solanize.log", "solanize", "gateway");
 
     app_log!(
         info,

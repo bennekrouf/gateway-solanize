@@ -94,7 +94,11 @@ impl<'a> AuthService<'a> {
         // Generate JWT
         let jwt = self.generate_jwt(wallet_address, &user.id.to_string())?;
 
-        app_log!(info, "Successful authentication for wallet: {}", wallet_address);
+        app_log!(
+            info,
+            "Successful authentication for wallet: {}",
+            wallet_address
+        );
         Ok(AuthResponse { jwt, user })
     }
 
@@ -156,7 +160,8 @@ impl<'a> AuthService<'a> {
                 AppError::Auth("Signature verification failed".to_string())
             })?;
 
-        app_log!(debug, 
+        app_log!(
+            debug,
             "Signature verified successfully for wallet: {}",
             wallet_address
         );
@@ -198,7 +203,12 @@ impl<'a> AuthService<'a> {
         .fetch_one(pool)
         .await?;
 
-        app_log!(info, "User ready: {} for wallet: {}", user.id, wallet_address);
+        app_log!(
+            info,
+            "User ready: {} for wallet: {}",
+            user.id,
+            wallet_address
+        );
         Ok(user)
     }
 
