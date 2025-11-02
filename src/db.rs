@@ -4,7 +4,7 @@ use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase};
 pub async fn setup_database(database_url: &str) -> AppResult<SqlitePool> {
     // Create database if it doesn't exist
     if !Sqlite::database_exists(database_url).await.unwrap_or(false) {
-        tracing::info!("Creating database {}", database_url);
+        app_log!(info, "Creating database {}", database_url);
         Sqlite::create_database(database_url).await?;
     }
 
@@ -17,7 +17,7 @@ pub async fn setup_database(database_url: &str) -> AppResult<SqlitePool> {
 }
 
 async fn run_migrations(pool: &SqlitePool) -> AppResult<()> {
-    tracing::info!("Running database migrations");
+    app_log!(info, "Running database migrations");
 
     // Users table
     sqlx::query(
@@ -99,6 +99,6 @@ async fn run_migrations(pool: &SqlitePool) -> AppResult<()> {
         .execute(pool)
         .await?;
 
-    tracing::info!("Database migrations completed");
+    app_log!(info, "Database migrations completed");
     Ok(())
 }

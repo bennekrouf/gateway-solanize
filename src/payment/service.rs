@@ -133,14 +133,14 @@ impl<'a> PaymentService<'a> {
                     .execute(pool.inner())
                     .await?;
 
-                tracing::info!(
+                app_log!(info, 
                     "User {} upgraded to premium via transaction {}",
                     transaction.user_id,
                     transaction.id
                 );
             }
             _ => {
-                tracing::info!(
+                app_log!(info, 
                     "No post-transaction logic for type: {}",
                     transaction.transaction_type
                 );

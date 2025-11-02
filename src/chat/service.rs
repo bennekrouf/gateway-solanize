@@ -218,7 +218,7 @@ impl<'a> ChatService<'a> {
         // For now, we'll need to reconstruct the action or store it in session state
 
         // Placeholder logic - in production, you'd retrieve the stored action
-        tracing::warn!("Action execution placeholder - need to implement action storage");
+        app_log!(warn, "Action execution placeholder - need to implement action storage");
 
         // For now, return a generic error since we need to implement action storage
         Err(AppError::Internal(
@@ -871,7 +871,7 @@ impl<'a> ChatService<'a> {
             .execute(pool.inner())
             .await?;
 
-        tracing::info!("Session {} deleted by user {}", session_id, user_id);
+        app_log!(info, "Session {} deleted by user {}", session_id, user_id);
         Ok(())
     }
 }

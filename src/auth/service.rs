@@ -58,7 +58,7 @@ impl<'a> AuthService<'a> {
         let now = Utc::now();
         challenges.retain(|_, v| v.expires_at > now);
 
-        tracing::info!("Generated challenge for wallet: {}", wallet_address);
+        app_log!(info, "Generated challenge for wallet: {}", wallet_address);
         Ok(challenge)
     }
 
@@ -94,7 +94,7 @@ impl<'a> AuthService<'a> {
         // Generate JWT
         let jwt = self.generate_jwt(wallet_address, &user.id.to_string())?;
 
-        tracing::info!("Successful authentication for wallet: {}", wallet_address);
+        app_log!(info, "Successful authentication for wallet: {}", wallet_address);
         Ok(AuthResponse { jwt, user })
     }
 
@@ -152,11 +152,11 @@ impl<'a> AuthService<'a> {
         verifying_key
             .verify(message.as_bytes(), &ed25519_signature)
             .map_err(|e| {
-                tracing::warn!("Signature verification failed: {:?}", e);
+                app_log!(warn, "Signature verification failed: {:?}", e);
                 AppError::Auth("Signature verification failed".to_string())
             })?;
 
-        tracing::debug!(
+        app_log!(debug, 
             "Signature verified successfully for wallet: {}",
             wallet_address
         );
@@ -172,7 +172,7 @@ impl<'a> AuthService<'a> {
         .fetch_one(pool)
         .await
         {
-            tracing::debug!("Found existing user: {}", user.id);
+            app_log!(debug, "Found existing user: {}", user.id);
             return Ok(user);
         }
 
@@ -198,7 +198,7 @@ impl<'a> AuthService<'a> {
         .fetch_one(pool)
         .await?;
 
-        tracing::info!("User ready: {} for wallet: {}", user.id, wallet_address);
+        app_log!(info, "User ready: {} for wallet: {}", user.id, wallet_address);
         Ok(user)
     }
 
@@ -229,7 +229,7 @@ impl<'a> AuthService<'a> {
         )
         .map(|data| data.claims)
         .map_err(|e| {
-            tracing::warn!("JWT verification failed: {:?}", e);
+            app_log!(warn, "JWT verification failed: {:?}", e);
             AppError::Auth("Invalid or expired token".to_string())
         })
     }

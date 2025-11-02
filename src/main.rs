@@ -6,12 +6,12 @@ use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
 use std::collections::HashMap;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-// mod api;
 mod auth;
 mod chat;
 mod config;
 mod db;
 mod error;
+mod logging_macros;
 mod payment;
 mod solana;
 mod types;
@@ -38,13 +38,17 @@ async fn main() -> Result<(), rocket::Error> {
     dotenv().ok();
     let cli = Cli::parse();
 
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new("info"))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    init_logging!(
+        &config.logging.format,
+        "/tmp/solanize.log",
+        "solanize",
+        "gateway"
+    );
 
-    tracing::info!("Starting Solana Gateway with API0 integration on port ",);
+    app_log!(
+        info,
+        "Starting Solana Gateway with API0 integration on port ",
+    );
 
     // Load configuration and override port
     let mut config = AppConfig::load().expect("Failed to load configuration");
@@ -57,11 +61,15 @@ async fn main() -> Result<(), rocket::Error> {
     // Initialize challenge store
     let challenge_store: ChallengeStore = rocket::tokio::sync::RwLock::new(HashMap::new());
 
-    tracing::info!("CORS config loaded:");
-    tracing::info!("  allowed_origins: {:?}", config.cors.allowed_origins);
-    tracing::info!("  allowed_methods: {:?}", config.cors.allowed_methods);
-    tracing::info!("  allowed_headers: {:?}", config.cors.allowed_headers);
-    tracing::info!("  allow_credentials: {}", config.cors.allow_credentials);
+    app_log!(info, "CORS config loaded:");
+    app_log!(info, "  allowed_origins: {:?}", config.cors.allowed_origins);
+    app_log!(info, "  allowed_methods: {:?}", config.cors.allowed_methods);
+    app_log!(info, "  allowed_headers: {:?}", config.cors.allowed_headers);
+    app_log!(
+        info,
+        "  allow_credentials: {}",
+        config.cors.allow_credentials
+    );
 
     // Setup CORS
     let allowed_origins = AllowedOrigins::some_exact(&config.cors.allowed_origins);
@@ -157,7 +165,7 @@ async fn main() -> Result<(), rocket::Error> {
         rocket::tokio::signal::ctrl_c()
             .await
             .expect("Failed to listen for ctrl+c");
-        tracing::info!("Received shutdown signal");
+        app_log!(info, "Received shutdown signal");
         let _ = tx.send(());
     });
 
@@ -168,7 +176,7 @@ async fn main() -> Result<(), rocket::Error> {
             result?;
         }
         _ = rx => {
-            tracing::info!("Graceful shutdown initiated");
+            app_log!(info, "Graceful shutdown initiated");
             // The rocket will shutdown when the select completes
         }
     }

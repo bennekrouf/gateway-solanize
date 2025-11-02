@@ -101,7 +101,7 @@ impl<'a> Api0Service<'a> {
             .await
             .map_err(|e| AppError::Internal(format!("Failed to read API0 response: {}", e)))?;
 
-        tracing::info!("API0 raw response: {}", response_text);
+        app_log!(info, "API0 raw response: {}", response_text);
 
         let api0_responses: Vec<Api0Response> =
             serde_json::from_str(&response_text).map_err(|e| {
@@ -409,8 +409,8 @@ impl<'a> EndpointExecutor<'a> {
             self.config.payment.solana_service_url, endpoint.endpoint
         );
 
-        tracing::info!("Executing endpoint: {} {}", endpoint.method, url);
-        tracing::info!(
+        app_log!(info, "Executing endpoint: {} {}", endpoint.method, url);
+        app_log!(info, 
             "Parameters: {}",
             serde_json::to_string_pretty(&endpoint.params).unwrap_or_default()
         );
