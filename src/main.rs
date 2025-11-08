@@ -38,7 +38,7 @@ async fn main() -> Result<(), rocket::Error> {
     dotenv().ok();
     let cli = Cli::parse();
 
-    init_logging!("/var/log/solanize.log", "solanize", "gateway");
+    init_logging!("/var/log/solanize.log", "solanize", "gateway", "debug,rocket::server=off");
 
     app_log!(
         info,
