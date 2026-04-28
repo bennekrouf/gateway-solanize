@@ -1,3 +1,4 @@
+use graflog::app_log;
 use crate::error::AppResult;
 use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase};
 

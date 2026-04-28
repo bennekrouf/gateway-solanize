@@ -39,7 +39,7 @@ pub async fn get_sessions(
     Ok(Json(sessions))
 }
 
-// UPDATED: This is the main endpoint that handles API0 integration
+// Main chat endpoint — Claude calls solanize-mcp tools server-side; one round-trip
 #[post("/sessions/<session_id>/messages", data = "<request>")]
 pub async fn send_message(
     session_id: Uuid,
@@ -48,8 +48,17 @@ pub async fn send_message(
     pool: &State<SqlitePool>,
     config: &State<AppConfig>,
 ) -> AppResult<Json<MessageResponse>> {
+    // M2 — Reject oversized messages before they reach the AI (cost + DoS protection)
+    const MAX_MESSAGE_LEN: usize = 8_000;
+    if request.content.len() > MAX_MESSAGE_LEN {
+        return Err(crate::error::AppError::Validation(format!(
+            "Message too long ({} chars). Maximum is {} characters.",
+            request.content.len(),
+            MAX_MESSAGE_LEN
+        )));
+    }
+
     let chat_service = ChatService::new(config);
-    // This method now handles API0 integration properly
     let response = chat_service
         .send_message_with_transactions(session_id, &user.id, &user.wallet_address, &request, pool)
         .await?;
@@ -84,29 +93,10 @@ pub async fn get_messages(
 
 #[get("/health")]
 pub async fn chat_health(config: &State<AppConfig>) -> AppResult<Json<serde_json::Value>> {
+    // M3 — Do not leak AI provider config details (model, URL, etc.) to unauthenticated callers
     let chat_service = ChatService::new(config);
     let ai_healthy = chat_service.health_check().await.unwrap_or(false);
-
-    let mut response = serde_json::json!({
-        "ai_provider": config.chat.ai_provider,
-        "healthy": ai_healthy
-    });
-
-    if config.chat.ai_provider == "ollama" {
-        response["ollama"] = serde_json::json!({
-            "url": config.chat.ollama.url,
-            "model": config.chat.ollama.model,
-            "healthy": ai_healthy
-        });
-    } else if let Some(provider_config) = config.chat.api_providers.get(&config.chat.ai_provider) {
-        response["provider"] = serde_json::json!({
-            "base_url": provider_config.base_url,
-            "model": provider_config.model,
-            "healthy": ai_healthy
-        });
-    }
-
-    Ok(Json(response))
+    Ok(Json(serde_json::json!({ "healthy": ai_healthy })))
 }
 
 #[get("/models")]

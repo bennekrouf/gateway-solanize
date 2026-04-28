@@ -1,65 +1,42 @@
-// src/chat/service.rs - Updated version with proper API0 integration
+use graflog::app_log;
 use chrono::Utc;
 use rocket::State;
 use sqlx::SqlitePool;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::config::ApiProviderConfig;
 use crate::{
     config::AppConfig,
     error::{AppError, AppResult},
-    types::{ChatSession, Message, MessageResponse},
+    types::{ChatSession, Message, MessageResponse, PreparedTransaction, SendMessageRequest},
 };
 
-use crate::types::ActionResponse;
-use crate::types::PreparedTransaction;
-use crate::types::ProposedActions;
-use crate::types::ProposedEndpoint;
-use crate::types::SendMessageRequest;
-use crate::types::{ActionExecutionResult, RiskLevel};
-
-// Import the new API0 service
-use super::api0_service::{Api0Service, EndpointExecutor};
+// ── ChatService ───────────────────────────────────────────────────────────────
 
 pub struct ChatService<'a> {
     config: &'a AppConfig,
     client: reqwest::Client,
-    api0_service: Api0Service<'a>,
-    endpoint_executor: EndpointExecutor<'a>,
 }
 
 impl<'a> ChatService<'a> {
     pub fn new(config: &'a AppConfig) -> Self {
-        // Use timeout from current provider or ollama
-        let timeout = if config.chat.ai_provider == "ollama" {
-            config.chat.ollama.timeout_seconds
-        } else {
-            config
-                .chat
-                .api_providers
-                .get(&config.chat.ai_provider)
-                .map(|p| p.timeout_seconds)
-                .unwrap_or(30)
-        };
+        let timeout = config
+            .chat
+            .api_providers
+            .get("claude")
+            .map(|p| p.timeout_seconds)
+            .unwrap_or(60);
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout))
             .build()
             .expect("Failed to create HTTP client");
 
-        let api0_service = Api0Service::new(config);
-        let endpoint_executor = EndpointExecutor::new(config);
-
-        Self {
-            config,
-            client,
-            api0_service,
-            endpoint_executor,
-        }
+        Self { config, client }
     }
 
-    // Main message handling with API0 integration
+    // ── Main entry point ──────────────────────────────────────────────────────
+
     pub async fn send_message_with_transactions(
         &self,
         session_id: Uuid,
@@ -68,357 +45,288 @@ impl<'a> ChatService<'a> {
         request: &SendMessageRequest,
         pool: &State<SqlitePool>,
     ) -> AppResult<MessageResponse> {
-        // Handle signed transaction submission
+        // If the user has already signed a transaction, submit it directly.
+        // No Claude call needed — the intent is unambiguous.
         if let Some(signed_tx) = &request.signed_transaction {
             return self
                 .handle_signed_transaction(
                     session_id,
-                    user_id,
-                    user_wallet,
                     &request.content,
                     signed_tx,
-                    request.transaction_id.as_deref(),
                     pool,
                 )
                 .await;
         }
 
-        // Handle user's response to proposed actions
-        if let Some(action_response) = &request.action_response {
-            return self
-                .handle_action_response(session_id, user_id, user_wallet, action_response, pool)
-                .await;
-        }
-
-        // Get trading context for API0 analysis
-        let trading_context = self.get_trading_context(user_wallet).await?;
-
-        // STEP 1: Send message to API0 for intent analysis
-        let proposed_actions = self
-            .api0_service
-            .analyze_message(&request.content, &trading_context)
+        // Normal conversation: call Claude with solanize-mcp tools attached
+        let history = self.get_conversation_history(session_id, pool).await?;
+        let (ai_text, prepared_tx) = self
+            .call_claude_with_mcp(&request.content, &history, user_wallet)
             .await?;
 
-        // STEP 2: Generate AI response explaining the proposed actions or regular response
-        let ai_response = if let Some(ref actions) = proposed_actions {
-            self.generate_action_explanation_response(&request.content, actions)
-                .await?
-        } else {
-            // Regular AI response for non-action messages
-            self.generate_ai_response_with_context(
-                &request.content,
-                &self.get_conversation_history(session_id, pool).await?,
-                &trading_context,
-            )
-            .await?
-        };
-
-        // Save messages
         let user_message = self
             .save_message(session_id, &request.content, true, pool)
             .await?;
         let ai_message = self
-            .save_message(session_id, &ai_response, false, pool)
+            .save_message(session_id, &ai_text, false, pool)
             .await?;
 
         Ok(MessageResponse {
             user_message,
             ai_message,
-            proposed_actions, // Frontend will show these for user validation
-            prepared_transaction: None,
+            prepared_transaction: prepared_tx,
         })
     }
 
-    // Handle user's response to proposed actions (approve/reject)
-    async fn handle_action_response(
+    // ── Claude + MCP call ─────────────────────────────────────────────────────
+    //
+    // Uses the Anthropic Messages API beta with the solanize-mcp server attached.
+    // Anthropic executes the full MCP tool loop server-side — one HTTP call is
+    // enough; the response already contains the final text + tool results.
+
+    async fn call_claude_with_mcp(
         &self,
-        session_id: Uuid,
-        _user_id: &Uuid,
+        user_message: &str,
+        history: &[Message],
         user_wallet: &str,
-        action_response: &ActionResponse,
-        pool: &State<SqlitePool>,
-    ) -> AppResult<MessageResponse> {
-        let response_text = match action_response.approved {
-            true => {
-                // User approved - execute the actions via API0's proposed endpoints
-                let execution_result = self
-                    .execute_approved_actions(
-                        &action_response.action_id,
-                        user_wallet,
-                        &action_response.modified_params,
-                    )
-                    .await?;
+    ) -> AppResult<(String, Option<PreparedTransaction>)> {
+        let claude_config = self
+            .config
+            .chat
+            .api_providers
+            .get("claude")
+            .ok_or_else(|| AppError::Internal("Claude provider not configured".to_string()))?;
 
-                match execution_result {
-                    ActionExecutionResult::PreparedTransaction(tx) => {
-                        // Save messages and return prepared transaction for signing
-                        let user_message = self
-                            .save_message(session_id, "Approved actions", true, pool)
-                            .await?;
-                        let ai_message = self
-                            .save_message(
-                                session_id,
-                                "Transaction prepared. Please review and sign.",
-                                false,
-                                pool,
-                            )
-                            .await?;
+        // Build message history (last 20 turns for context)
+        let mut messages: Vec<serde_json::Value> = history
+            .iter()
+            .rev()
+            .take(20)
+            .rev()
+            .map(|m| {
+                let role = if m.is_user { "user" } else { "assistant" };
+                serde_json::json!({ "role": role, "content": m.content })
+            })
+            .collect();
 
-                        return Ok(MessageResponse {
-                            user_message,
-                            ai_message,
-                            proposed_actions: None,
-                            prepared_transaction: Some(tx),
-                        });
-                    }
-                    ActionExecutionResult::DataResponse(data) => {
-                        format!("Action completed successfully:\n{}", data)
+        messages.push(serde_json::json!({ "role": "user", "content": user_message }));
+
+        let system_prompt = format!(
+            "You are a Solana blockchain assistant. The user's connected wallet is `{}`.\n\
+             \n\
+             You have access to Solana tools: check balances, token prices, transaction history,\n\
+             portfolio, token search, and transaction preparation/submission.\n\
+             \n\
+             For transfers and swaps, use the prepare tools to create an unsigned transaction.\n\
+             The user will sign it in their browser wallet — you do NOT need to submit it\n\
+             yourself unless the user explicitly provides a signed transaction.\n\
+             \n\
+             Be concise and accurate. Format numbers clearly (e.g. 1.5 SOL, $42.30).",
+            user_wallet
+        );
+
+        let payload = serde_json::json!({
+            "model":      claude_config.model,
+            "max_tokens": 2048,
+            "system":     system_prompt,
+            "messages":   messages,
+            "mcp_servers": [{
+                "type": "url",
+                "url":  self.config.chat.solanize_mcp_url,
+                "name": "solanize"
+            }],
+            "tools": [{
+                "type":            "mcp_toolset",
+                "mcp_server_name": "solanize"
+            }]
+        });
+
+        app_log!(info, "Calling Claude with MCP (model: {})", claude_config.model);
+
+        let response = self
+            .client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key",         &claude_config.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta",    "mcp-client-2025-11-20")
+            .header("content-type",      "application/json")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Claude API unavailable: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AppError::Internal(format!(
+                "Claude API error {}: {}",
+                status, body
+            )));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to parse Claude response: {}", e)))?;
+
+        self.parse_claude_response(&json)
+    }
+
+    // ── Parse response ────────────────────────────────────────────────────────
+    //
+    // Claude's response content array may contain:
+    //  - { type: "text" }          → user-facing answer
+    //  - { type: "mcp_tool_use" }  → which tool Claude called (informational)
+    //  - { type: "mcp_tool_result" } → what the tool returned
+    //
+    // We collect all text blocks into the AI message, and scan tool results
+    // for a `prepared_transaction` payload emitted by solana_prepare_transfer
+    // or solana_prepare_swap.
+
+    fn parse_claude_response(
+        &self,
+        json: &serde_json::Value,
+    ) -> AppResult<(String, Option<PreparedTransaction>)> {
+        let content = json
+            .get("content")
+            .and_then(|c| c.as_array())
+            .ok_or_else(|| AppError::Internal("No content in Claude response".to_string()))?;
+
+        let mut text_parts: Vec<String> = Vec::new();
+        let mut prepared_tx: Option<PreparedTransaction> = None;
+
+        for block in content {
+            match block.get("type").and_then(|t| t.as_str()) {
+                Some("text") => {
+                    if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
+                        text_parts.push(t.to_string());
                     }
                 }
+                Some("mcp_tool_result") => {
+                    // The solanize-mcp prepare tools embed a JSON object with
+                    // action: "prepared_transaction" in their text result.
+                    if let Some(arr) = block.get("content").and_then(|c| c.as_array()) {
+                        for rb in arr {
+                            if let Some(raw) = rb.get("text").and_then(|v| v.as_str()) {
+                                if let Ok(obj) = serde_json::from_str::<serde_json::Value>(raw) {
+                                    if obj.get("action").and_then(|v| v.as_str())
+                                        == Some("prepared_transaction")
+                                    {
+                                        prepared_tx = Some(PreparedTransaction {
+                                            transaction_id: Uuid::new_v4().to_string(),
+                                            transaction_type: obj
+                                                .get("transaction_type")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("transfer")
+                                                .to_string(),
+                                            unsigned_transaction: obj
+                                                .get("unsigned_transaction")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string(),
+                                            from_address: obj
+                                                .get("from_address")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string(),
+                                            to_address: obj
+                                                .get("to_address")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("")
+                                                .to_string(),
+                                            amount: obj
+                                                .get("amount")
+                                                .and_then(|v| v.as_f64())
+                                                .unwrap_or(0.0),
+                                            token: obj
+                                                .get("from_token")
+                                                .or(obj.get("token"))
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("SOL")
+                                                .to_string(),
+                                            fee_estimate: Some(0.000005),
+                                        });
+                                        app_log!(
+                                            info,
+                                            "Extracted prepared_transaction (type: {})",
+                                            prepared_tx
+                                                .as_ref()
+                                                .map(|t| t.transaction_type.as_str())
+                                                .unwrap_or("unknown")
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // mcp_tool_use blocks are informational — no action needed
+                _ => {}
             }
-            false => "Actions cancelled. How else can I help you?".to_string(),
+        }
+
+        let text = if text_parts.is_empty() {
+            "I processed your request.".to_string()
+        } else {
+            text_parts.join("\n")
         };
 
-        // Save messages for approve/reject flow
-        let user_message = self
-            .save_message(
-                session_id,
-                &format!(
-                    "Action response: {}",
-                    if action_response.approved {
-                        "Approved"
-                    } else {
-                        "Rejected"
-                    }
-                ),
-                true,
-                pool,
-            )
-            .await?;
-        let ai_message = self
-            .save_message(session_id, &response_text, false, pool)
-            .await?;
-
-        Ok(MessageResponse {
-            user_message,
-            ai_message,
-            proposed_actions: None,
-            prepared_transaction: None,
-        })
+        Ok((text, prepared_tx))
     }
 
-    // Execute approved actions using the endpoint executor
-    async fn execute_approved_actions(
-        &self,
-        _action_id: &str,
-        _user_wallet: &str,
-        _modified_params: &Option<serde_json::Value>,
-    ) -> AppResult<ActionExecutionResult> {
-        // TODO: In real implementation, store and retrieve actions by action_id
-        // For now, we'll need to reconstruct the action or store it in session state
-
-        // Placeholder logic - in production, you'd retrieve the stored action
-        app_log!(warn, "Action execution placeholder - need to implement action storage");
-
-        // For now, return a generic error since we need to implement action storage
-        Err(AppError::Internal(
-            "Action execution requires action storage implementation".to_string(),
-        ))
-    }
-
-    // Execute a specific endpoint through the executor
-    async fn execute_endpoint(
-        &self,
-        endpoint: &ProposedEndpoint,
-    ) -> AppResult<ActionExecutionResult> {
-        let result = self.endpoint_executor.execute_endpoint(endpoint).await?;
-
-        // Handle different endpoint types
-        match endpoint.endpoint.as_str() {
-            "/solana/transaction/prepare" | "/solana/swap/prepare" => {
-                // These endpoints return transaction data for signing
-                if let Some(data) = result.get("data") {
-                    if let Some(unsigned_tx) =
-                        data.get("unsigned_transaction").and_then(|v| v.as_str())
-                    {
-                        let prepared_tx = PreparedTransaction {
-                            transaction_id: uuid::Uuid::new_v4().to_string(),
-                            transaction_type: if endpoint.endpoint.contains("swap") {
-                                "swap"
-                            } else {
-                                "transfer"
-                            }
-                            .to_string(),
-                            unsigned_transaction: unsigned_tx.to_string(),
-                            from_address: endpoint.params["payer_pubkey"]
-                                .as_str()
-                                .unwrap_or("")
-                                .to_string(),
-                            to_address: endpoint
-                                .params
-                                .get("to_address")
-                                .or(endpoint.params.get("to_token"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            amount: endpoint.params["amount"].as_f64().unwrap_or(0.0),
-                            token: endpoint
-                                .params
-                                .get("from_token")
-                                .or(Some(&serde_json::Value::String("SOL".to_string())))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("SOL")
-                                .to_string(),
-                            fee_estimate: Some(0.000005), // TODO: Get from response
-                        };
-                        return Ok(ActionExecutionResult::PreparedTransaction(prepared_tx));
-                    }
-                }
-                Err(AppError::Internal(
-                    "Invalid transaction response".to_string(),
-                ))
-            }
-            _ => {
-                // Read-only endpoints return data
-                let formatted_data = self.format_endpoint_response(endpoint, &result);
-                Ok(ActionExecutionResult::DataResponse(formatted_data))
-            }
-        }
-    }
-
-    // Format the response from different endpoints for user display
-    fn format_endpoint_response(
-        &self,
-        endpoint: &ProposedEndpoint,
-        result: &serde_json::Value,
-    ) -> String {
-        match endpoint.endpoint.as_str() {
-            "/solana/balance" => {
-                if let Some(data) = result.get("data") {
-                    format!(
-                        "Your balance: {} {}",
-                        data.get("balance").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                        data.get("token").and_then(|v| v.as_str()).unwrap_or("SOL")
-                    )
-                } else {
-                    "Unable to fetch balance".to_string()
-                }
-            }
-            "/solana/wallet/tokens" => {
-                let empty_ve = vec![];
-                if let Some(data) = result.get("data") {
-                    let tokens = data
-                        .get("tokens")
-                        .and_then(|v| v.as_array())
-                        .unwrap_or(&empty_ve);
-                    let mut response = "Your token holdings:\n".to_string();
-                    for token in tokens.iter().take(5) {
-                        if let (Some(symbol), Some(balance), Some(usd_value)) = (
-                            token.get("symbol").and_then(|v| v.as_str()),
-                            token.get("balance").and_then(|v| v.as_f64()),
-                            token.get("usd_value").and_then(|v| v.as_f64()),
-                        ) {
-                            response.push_str(&format!(
-                                "• {} {}: ${:.2}\n",
-                                balance, symbol, usd_value
-                            ));
-                        }
-                    }
-                    response
-                } else {
-                    "Unable to fetch token holdings".to_string()
-                }
-            }
-            "/solana/price" => {
-                if let Some(data) = result.get("data") {
-                    format!(
-                        "{} price: ${:.2}",
-                        data.get("token")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Token"),
-                        data.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0)
-                    )
-                } else {
-                    "Unable to fetch price".to_string()
-                }
-            }
-            "/solana/transactions/history" => {
-                if let Some(data) = result.get("data") {
-                    let empty_ve = vec![];
-                    let transactions = data
-                        .get("transactions")
-                        .and_then(|v| v.as_array())
-                        .unwrap_or(&empty_ve);
-                    let mut response = "Recent transactions:\n".to_string();
-                    for tx in transactions.iter().take(3) {
-                        if let (Some(signature), Some(amount), Some(token)) = (
-                            tx.get("signature").and_then(|v| v.as_str()),
-                            tx.get("amount").and_then(|v| v.as_f64()),
-                            tx.get("token_symbol").and_then(|v| v.as_str()),
-                        ) {
-                            response.push_str(&format!(
-                                "• {} {}: {}...\n",
-                                amount,
-                                token,
-                                &signature[..8]
-                            ));
-                        }
-                    }
-                    response
-                } else {
-                    "Unable to fetch transaction history".to_string()
-                }
-            }
-            _ => {
-                // Generic response for unknown endpoints
-                format!(
-                    "Response: {}",
-                    serde_json::to_string_pretty(result).unwrap_or_default()
-                )
-            }
-        }
-    }
+    // ── Signed transaction submission ─────────────────────────────────────────
+    //
+    // The user has signed a prepared transaction in their browser wallet and sent
+    // it back. We submit it directly to cli-solanize — no Claude call needed.
 
     async fn handle_signed_transaction(
         &self,
         session_id: Uuid,
-        _user_id: &Uuid,
-        _user_wallet: &str,
         message_content: &str,
-        signed_transaction: &str,
-        _transaction_id: Option<&str>,
+        signed_tx: &str,
         pool: &State<SqlitePool>,
     ) -> AppResult<MessageResponse> {
-        // Submit transaction through endpoint executor
-        let submit_endpoint = ProposedEndpoint {
-            endpoint: "/solana/transaction/submit".to_string(),
-            method: "POST".to_string(),
-            description: "Submit signed transaction to Solana network".to_string(),
-            params: serde_json::json!({
-                "signed_transaction": signed_transaction
-            }),
-            risk_level: RiskLevel::Low,
-        };
+        let url = format!(
+            "{}/solana/transaction/submit",
+            self.config.payment.solana_service_url
+        );
+        let auth = format!("Bearer {}", self.config.payment.cli_internal_secret);
+
+        app_log!(info, "Submitting signed transaction to cli-solanize");
 
         let result = self
-            .endpoint_executor
-            .execute_endpoint(&submit_endpoint)
-            .await?;
+            .client
+            .post(&url)
+            .header("Authorization", auth)
+            .json(&serde_json::json!({ "signed_transaction": signed_tx }))
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("cli-solanize unavailable: {}", e)))?;
 
-        let ai_response = if let Some(data) = result.get("data") {
-            if let Some(signature) = data.get("signature").and_then(|v| v.as_str()) {
-                format!(
-                    "Transaction submitted successfully! Signature: {}. You can track it on Solana Explorer.",
-                    signature
-                )
-            } else {
-                "Transaction submitted but signature not returned.".to_string()
-            }
+        let json: serde_json::Value = result
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Invalid cli response: {}", e)))?;
+
+        let ai_response = if json.get("success").and_then(|v| v.as_bool()) == Some(true) {
+            let sig = json
+                .pointer("/data/signature")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            format!(
+                "✅ Transaction submitted!\n\n\
+                 Signature: `{sig}`\n\n\
+                 [View on Solana Explorer](https://explorer.solana.com/tx/{sig})"
+            )
         } else {
-            "Transaction submission failed.".to_string()
+            let err = json
+                .pointer("/data/error")
+                .or_else(|| json.get("error"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            format!("❌ Transaction submission failed: {err}")
         };
 
-        // Save messages
         let user_message = self
             .save_message(session_id, message_content, true, pool)
             .await?;
@@ -429,55 +337,11 @@ impl<'a> ChatService<'a> {
         Ok(MessageResponse {
             user_message,
             ai_message,
-            proposed_actions: None,
             prepared_transaction: None,
         })
     }
 
-    // Generate AI explanation of proposed actions
-    async fn generate_action_explanation_response(
-        &self,
-        _user_message: &str,
-        actions: &ProposedActions,
-    ) -> AppResult<String> {
-        let action_summary = actions
-            .endpoints_to_call
-            .iter()
-            .map(|ep| format!("• {}: {}", ep.method, ep.description))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let warning_text = if !actions.warnings.is_empty() {
-            format!(
-                "\n⚠️ Warnings:\n{}",
-                actions
-                    .warnings
-                    .iter()
-                    .map(|w| format!("• {}", w))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        } else {
-            "".to_string()
-        };
-
-        let cost_text = if let Some(cost) = actions.estimated_cost {
-            format!("\n💰 Estimated cost: {} SOL", cost)
-        } else {
-            "".to_string()
-        };
-
-        Ok(format!(
-            "I understand you want to: {}\n\nProposed actions:\n{}{}{}\n\nConfidence: {:.0}%\n\nDo you want me to proceed with these actions?",
-            actions.intent_description,
-            action_summary,
-            warning_text,
-            cost_text,
-            actions.confidence_score * 100.0
-        ))
-    }
-
-    // Rest of the ChatService methods remain the same...
+    // ── Session / message helpers ─────────────────────────────────────────────
 
     pub async fn create_session(
         &self,
@@ -485,14 +349,13 @@ impl<'a> ChatService<'a> {
         title: Option<String>,
         pool: &State<SqlitePool>,
     ) -> AppResult<ChatSession> {
-        // Check session limit
-        let session_count: i64 =
+        let count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM chat_sessions WHERE user_id = ?")
                 .bind(user_id.to_string())
                 .fetch_one(pool.inner())
                 .await?;
 
-        if session_count >= self.config.chat.max_sessions_per_user as i64 {
+        if count >= self.config.chat.max_sessions_per_user as i64 {
             return Err(AppError::Validation(format!(
                 "Maximum {} sessions allowed per user",
                 self.config.chat.max_sessions_per_user
@@ -501,15 +364,14 @@ impl<'a> ChatService<'a> {
 
         let session_id = Uuid::new_v4();
         let now = Utc::now();
-        let session_title =
-            title.unwrap_or_else(|| format!("Chat {}", now.format("%Y-%m-%d %H:%M")));
+        let title = title.unwrap_or_else(|| format!("Chat {}", now.format("%Y-%m-%d %H:%M")));
 
         sqlx::query(
             "INSERT INTO chat_sessions (id, user_id, title, created_at) VALUES (?, ?, ?, ?)",
         )
         .bind(session_id.to_string())
         .bind(user_id.to_string())
-        .bind(&session_title)
+        .bind(&title)
         .bind(now.to_rfc3339())
         .execute(pool.inner())
         .await?;
@@ -517,7 +379,7 @@ impl<'a> ChatService<'a> {
         Ok(ChatSession {
             id: session_id,
             user_id: *user_id,
-            title: session_title,
+            title,
             created_at: now,
         })
     }
@@ -529,13 +391,14 @@ impl<'a> ChatService<'a> {
         is_user: bool,
         pool: &State<SqlitePool>,
     ) -> AppResult<Message> {
-        let message_id = Uuid::new_v4();
+        let msg_id = Uuid::new_v4();
         let now = Utc::now();
 
         sqlx::query(
-            "INSERT INTO messages (id, session_id, content, is_user, created_at) VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO messages (id, session_id, content, is_user, created_at) \
+             VALUES (?, ?, ?, ?, ?)",
         )
-        .bind(message_id.to_string())
+        .bind(msg_id.to_string())
         .bind(session_id.to_string())
         .bind(content)
         .bind(is_user)
@@ -544,7 +407,7 @@ impl<'a> ChatService<'a> {
         .await?;
 
         Ok(Message {
-            id: message_id,
+            id: msg_id,
             session_id,
             content: content.to_string(),
             is_user,
@@ -558,11 +421,11 @@ impl<'a> ChatService<'a> {
         pool: &State<SqlitePool>,
     ) -> AppResult<Vec<Message>> {
         let messages = sqlx::query_as::<_, Message>(
-            "SELECT id, session_id, content, is_user, created_at 
-             FROM messages 
-             WHERE session_id = ? 
-             ORDER BY created_at ASC 
-             LIMIT 20", // Last 20 messages for context
+            "SELECT id, session_id, content, is_user, created_at \
+             FROM messages \
+             WHERE session_id = ? \
+             ORDER BY created_at ASC \
+             LIMIT 20",
         )
         .bind(session_id.to_string())
         .fetch_all(pool.inner())
@@ -571,293 +434,15 @@ impl<'a> ChatService<'a> {
         Ok(messages)
     }
 
-    // Get comprehensive trading context using endpoint executor
-    async fn get_trading_context(&self, wallet_address: &str) -> AppResult<serde_json::Value> {
-        // Use endpoint executor instead of direct calls
-        let portfolio_endpoint = ProposedEndpoint {
-            endpoint: "/solana/wallet/tokens".to_string(),
-            method: "POST".to_string(),
-            description: "Get wallet token holdings".to_string(),
-            params: serde_json::json!({
-                "pubkey": wallet_address
-            }),
-            risk_level: RiskLevel::Low,
-        };
-
-        let history_endpoint = ProposedEndpoint {
-            endpoint: "/solana/transactions/history".to_string(),
-            method: "POST".to_string(),
-            description: "Get transaction history".to_string(),
-            params: serde_json::json!({
-                "pubkey": wallet_address,
-                "limit": 20
-            }),
-            risk_level: RiskLevel::Low,
-        };
-
-        let portfolio_result = self
-            .endpoint_executor
-            .execute_endpoint(&portfolio_endpoint)
-            .await?;
-        let history_result = self
-            .endpoint_executor
-            .execute_endpoint(&history_endpoint)
-            .await?;
-
-        Ok(serde_json::json!({
-            "wallet_address": wallet_address,
-            "portfolio": portfolio_result.get("data"),
-            "recent_activity": history_result.get("data"),
-            "context_timestamp": chrono::Utc::now().to_rfc3339()
-        }))
-    }
-
-    // Enhanced AI prompt with trading context
-    async fn generate_ai_response_with_context(
-        &self,
-        user_message: &str,
-        conversation_history: &[Message],
-        trading_context: &serde_json::Value,
-    ) -> AppResult<String> {
-        // Build enhanced system prompt
-        let mut system_prompt = "You are a specialized Solana trading assistant. Provide personalized trading advice based on the user's actual portfolio and transaction history.".to_string();
-
-        system_prompt.push_str(&format!(
-            "\n\nUSER'S CURRENT PORTFOLIO DATA:\n{}\n\nUse this data to provide specific, actionable advice. Reference their actual holdings and recent transactions when relevant.",
-            serde_json::to_string_pretty(trading_context).unwrap_or_default()
-        ));
-
-        if self.config.chat.ai_provider == "ollama" {
-            self.call_ollama_with_context(user_message, conversation_history, &system_prompt)
-                .await
-        } else {
-            let provider_config = self
-                .config
-                .chat
-                .api_providers
-                .get(&self.config.chat.ai_provider)
-                .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "Provider '{}' not configured",
-                        self.config.chat.ai_provider
-                    ))
-                })?;
-
-            self.call_api_provider_with_context(
-                user_message,
-                conversation_history,
-                provider_config,
-                &system_prompt,
-            )
-            .await
-        }
-    }
-
-    async fn call_api_provider_with_context(
-        &self,
-        user_message: &str,
-        conversation_history: &[Message],
-        config: &ApiProviderConfig,
-        system_prompt: &str,
-    ) -> AppResult<String> {
-        let payload = match self.config.chat.ai_provider.as_str() {
-            "cohere" => {
-                let mut chat_history = Vec::new();
-                for msg in conversation_history.iter().rev().take(10).rev() {
-                    let role = if msg.is_user { "USER" } else { "CHATBOT" };
-                    chat_history.push(serde_json::json!({
-                        "role": role,
-                        "message": msg.content
-                    }));
-                }
-
-                serde_json::json!({
-                    "model": config.model,
-                    "message": user_message,
-                    "chat_history": chat_history,
-                    "max_tokens": 1000,
-                    "preamble": system_prompt
-                })
-            }
-            _ => {
-                let mut messages = Vec::new();
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": system_prompt
-                }));
-
-                for msg in conversation_history.iter().rev().take(10).rev() {
-                    let role = if msg.is_user { "user" } else { "assistant" };
-                    messages.push(serde_json::json!({"role": role, "content": msg.content}));
-                }
-                messages.push(serde_json::json!({"role": "user", "content": user_message}));
-
-                serde_json::json!({
-                    "model": config.model,
-                    "messages": messages,
-                    "max_tokens": 1000
-                })
-            }
-        };
-
-        let response = self
-            .client
-            .post(&format!("{}{}", config.base_url, config.endpoint))
-            .header("Content-Type", "application/json")
-            .header("Authorization", format!("Bearer {}", config.api_key))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(format!("API unavailable: {}", e)))?;
-
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to read response: {}", e)))?;
-
-        let json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| AppError::Internal(format!("JSON parse failed: {}", e)))?;
-
-        self.extract_response_content(&json, &config.response_path)
-    }
-
-    async fn call_ollama_with_context(
-        &self,
-        user_message: &str,
-        conversation_history: &[Message],
-        system_prompt: &str,
-    ) -> AppResult<String> {
-        let mut messages = Vec::new();
-
-        messages.push(serde_json::json!({
-            "role": "system",
-            "content": system_prompt
-        }));
-
-        for msg in conversation_history.iter().rev().take(5).rev() {
-            let role = if msg.is_user { "user" } else { "assistant" };
-            messages.push(serde_json::json!({"role": role, "content": msg.content}));
-        }
-        messages.push(serde_json::json!({"role": "user", "content": user_message}));
-
-        let payload = serde_json::json!({
-            "model": self.config.chat.ollama.model,
-            "messages": messages,
-            "stream": false
-        });
-
-        let response = self
-            .client
-            .post(&format!("{}/api/chat", self.config.chat.ollama.url))
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(format!("Ollama unavailable: {}", e)))?;
-
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to read response: {}", e)))?;
-
-        let json: serde_json::Value = serde_json::from_str(&response_text)
-            .map_err(|e| AppError::Internal(format!("JSON parse failed: {}", e)))?;
-
-        let content = json["message"]["content"]
-            .as_str()
-            .ok_or_else(|| AppError::Internal("No content in Ollama response".to_string()))?;
-
-        Ok(content.to_string())
-    }
-
-    fn extract_response_content(&self, json: &serde_json::Value, path: &str) -> AppResult<String> {
-        let parts: Vec<&str> = path.split('.').collect();
-        let mut current = json;
-
-        for (_, part) in parts.iter().enumerate() {
-            if let Ok(index) = part.parse::<usize>() {
-                current = current.get(index).ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "Invalid response path at index {}: {}",
-                        index, part
-                    ))
-                })?;
-            } else {
-                current = current.get(part).ok_or_else(|| {
-                    AppError::Internal(format!("Invalid response path at field: {}", part))
-                })?;
-            }
-        }
-
-        let result = current.as_str().unwrap_or("No response").to_string();
-        Ok(result)
-    }
-
-    pub async fn health_check(&self) -> AppResult<bool> {
-        if self.config.chat.ai_provider == "ollama" {
-            let url = format!("{}/api/tags", self.config.chat.ollama.url);
-            match self.client.get(&url).send().await {
-                Ok(response) => Ok(response.status().is_success()),
-                Err(_) => Ok(false),
-            }
-        } else {
-            let provider_config = self
-                .config
-                .chat
-                .api_providers
-                .get(&self.config.chat.ai_provider);
-
-            match provider_config {
-                Some(config) => {
-                    let url = format!("{}{}", config.base_url, config.endpoint);
-                    match self.client.get(&url).send().await {
-                        Ok(response) => Ok(response.status() != reqwest::StatusCode::NOT_FOUND),
-                        Err(_) => Ok(false),
-                    }
-                }
-                None => Ok(false),
-            }
-        }
-    }
-
-    pub async fn list_models(&self) -> AppResult<Vec<String>> {
-        let url = format!("{}/api/tags", self.config.chat.ollama.url);
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(format!("Ollama service unavailable: {}", e)))?;
-
-        if !response.status().is_success() {
-            return Err(AppError::Internal(
-                "Failed to fetch Ollama models".to_string(),
-            ));
-        }
-
-        let tags_response: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| AppError::Internal(format!("Invalid Ollama tags response: {}", e)))?;
-
-        let models = tags_response["models"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|model| model["name"].as_str().map(|s| s.to_string()))
-            .collect();
-
-        Ok(models)
-    }
-
     pub async fn delete_session(
         &self,
         session_id: Uuid,
         user_id: &Uuid,
         pool: &State<SqlitePool>,
     ) -> AppResult<()> {
-        let _session = sqlx::query_as::<_, ChatSession>(
-            "SELECT id, user_id, title, created_at FROM chat_sessions WHERE id = ? AND user_id = ?",
+        sqlx::query_as::<_, ChatSession>(
+            "SELECT id, user_id, title, created_at \
+             FROM chat_sessions WHERE id = ? AND user_id = ?",
         )
         .bind(session_id.to_string())
         .bind(user_id.to_string())
@@ -873,5 +458,40 @@ impl<'a> ChatService<'a> {
 
         app_log!(info, "Session {} deleted by user {}", session_id, user_id);
         Ok(())
+    }
+
+    // ── Health / model listing ────────────────────────────────────────────────
+
+    pub async fn health_check(&self) -> AppResult<bool> {
+        // Verify the solanize-mcp server is reachable
+        let mcp_base = self
+            .config
+            .chat
+            .solanize_mcp_url
+            .split("/mcp/")
+            .next()
+            .unwrap_or("http://127.0.0.1:4010");
+
+        match self
+            .client
+            .get(&format!("{}/health", mcp_base))
+            .send()
+            .await
+        {
+            Ok(r) => Ok(r.status().is_success()),
+            Err(_) => Ok(false),
+        }
+    }
+
+    pub async fn list_models(&self) -> AppResult<Vec<String>> {
+        // Return the configured Claude model
+        let model = self
+            .config
+            .chat
+            .api_providers
+            .get("claude")
+            .map(|p| p.model.clone())
+            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+        Ok(vec![model])
     }
 }

@@ -3,23 +3,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RiskLevel {
-    Low,
-    Medium,
-    High,
-}
-
-impl RiskLevel {
-    pub fn from_string(s: &str) -> Self {
-        match s {
-            "Low" => RiskLevel::Low,
-            "Medium" => RiskLevel::Medium,
-            "High" => RiskLevel::High,
-            _ => RiskLevel::Medium, // Default fallback
-        }
-    }
-}
 
 // Custom User struct with manual FromRow implementation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,49 +168,19 @@ pub struct CreateSessionRequest {
 #[derive(Debug, Deserialize)]
 pub struct SendMessageRequest {
     pub content: String,
-    pub action_response: Option<ActionResponse>,
+    /// Base64-encoded signed transaction from the user's wallet.
+    /// When present the gateway submits it directly; no Claude call is made.
     pub signed_transaction: Option<String>,
     pub transaction_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ActionResponse {
-    pub action_id: String,
-    pub approved: bool,
-    pub modified_params: Option<serde_json::Value>, // User can modify parameters
 }
 
 #[derive(Debug, Serialize)]
 pub struct MessageResponse {
     pub user_message: Message,
     pub ai_message: Message,
-    pub proposed_actions: Option<ProposedActions>,
+    /// Set when Claude prepared a transaction that the user must sign.
+    /// The frontend uses this to trigger the wallet signing UI.
     pub prepared_transaction: Option<PreparedTransaction>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ProposedActions {
-    pub action_id: String,
-    pub intent_description: String,
-    pub confidence_score: f64,
-    pub endpoints_to_call: Vec<ProposedEndpoint>,
-    pub estimated_cost: Option<f64>,
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ProposedEndpoint {
-    pub endpoint: String,
-    pub method: String,
-    pub description: String,
-    pub params: serde_json::Value,
-    pub risk_level: RiskLevel, // Change from String to RiskLevel
-}
-
-#[derive(Debug)]
-pub enum ActionExecutionResult {
-    PreparedTransaction(PreparedTransaction),
-    DataResponse(String),
 }
 
 #[derive(Debug, Serialize)]
@@ -242,11 +195,6 @@ pub struct PreparedTransaction {
     pub fee_estimate: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct OllamaResponseMessage {
-    pub _role: String,
-    pub _content: String,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateTransactionRequest {

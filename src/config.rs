@@ -44,8 +44,10 @@ pub struct AuthConfig {
 pub struct ChatConfig {
     pub max_sessions_per_user: u32,
     pub max_messages_per_session: u32,
+    /// Primary AI provider used for chat responses. Must be "claude" to use MCP tools.
     pub ai_provider: String,
-    pub api0_key: String,
+    /// Full URL of the solanize-mcp server, e.g. https://mcp.solanize.io/mcp/<MCP_SECRET>
+    pub solanize_mcp_url: String,
     pub ollama: OllamaConfig,
     pub api_providers: std::collections::HashMap<String, ApiProviderConfig>,
 }
@@ -70,6 +72,9 @@ pub struct ApiProviderConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct PaymentConfig {
     pub solana_service_url: String,
+    /// Must match CLI_INTERNAL_SECRET set on the cli-solanize service
+    pub cli_internal_secret: String,
+    pub solana_rpc_url: String,
     pub premium_price_sol: f64,
     pub timeout_seconds: u64,
 }

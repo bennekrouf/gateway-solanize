@@ -22,9 +22,11 @@ auth:
 chat:
   max_sessions_per_user: 100
   max_messages_per_session: 1000
-  ai_provider: "cohere"
-  api0_key: "${API0_KEY}"
-  
+  # Must be "claude" — MCP tool calling requires the Anthropic Messages API
+  ai_provider: "claude"
+  # solanize-mcp URL: secret is embedded in the path (set by deploy-vps.sh)
+  solanize_mcp_url: "http://127.0.0.1:4010/mcp/change-me-in-production"
+
   ollama:
     url: "http://localhost:11434"
     model: "deepseek-r1:8b"
@@ -48,7 +50,7 @@ chat:
       response_path: "choices.0.message.content"
       
     cohere:
-      api_key: "yTic1IyNddYd99KdwScBibnOEhtTzCb2Goy2wVfp"
+      api_key: "${COHERE_API_KEY}"
       base_url: "https://api.cohere.ai"
       endpoint: "/v1/chat"
       model: "command-r7b-12-2024"  # or "command-r-08-2024"
@@ -56,7 +58,9 @@ chat:
       response_path: "text"
 
 payment:
-  solana_service_url: "http://localhost:8000" # Solana microservice
+  solana_service_url: "http://127.0.0.1:9876" # cli-solanize (localhost only)
+  cli_internal_secret: "change-me-in-production" # must match CLI_INTERNAL_SECRET on cli-solanize
+  solana_rpc_url: "https://api.devnet.solana.com"
   premium_price_sol: 0.1
   timeout_seconds: 30
 

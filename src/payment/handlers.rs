@@ -72,7 +72,7 @@ pub async fn health_check(_config: &State<AppConfig>) -> AppResult<Json<serde_js
     // Simple health check - no direct Solana calls
     Ok(Json(serde_json::json!({
         "payment_service": "healthy",
-        "note": "Solana operations now handled via chat interface with API0"
+        "note": "Solana operations handled via chat interface (Claude + solanize-mcp)"
     })))
 }
 

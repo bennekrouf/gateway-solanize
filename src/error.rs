@@ -44,9 +44,24 @@ impl<'r> Responder<'r, 'static> for AppError {
             }
         };
 
+        // M1 — Never expose raw database errors (they can leak schema/column names).
+        // Log the full detail server-side, send a generic message to the client.
+        let client_message = match &self {
+            AppError::Database(e) => {
+                // Log detail internally (graflog not available in this context, use eprintln)
+                eprintln!("[ERROR] DB error (hidden from client): {:?}", e);
+                "An internal error occurred".to_string()
+            }
+            AppError::Internal(e) => {
+                eprintln!("[ERROR] Internal error (hidden from client): {}", e);
+                "An internal error occurred".to_string()
+            }
+            other => other.to_string(),
+        };
+
         let error_response = ErrorResponse {
             error: error_type.to_string(),
-            message: self.to_string(),
+            message: client_message,
             details: None,
         };
 

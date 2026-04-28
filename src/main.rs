@@ -1,4 +1,4 @@
-// src/main.rs - Updated with API0-centric architecture
+// src/main.rs
 use clap::{Parser, Subcommand};
 use dotenv::dotenv;
 use rocket::{catchers, routes};
@@ -46,11 +46,22 @@ async fn main() -> Result<(), rocket::Error> {
 
     app_log!(
         info,
-        "Starting Solana Gateway with API0 integration on port ",
+        "Starting Solana Gateway (Claude + solanize-mcp) on port ",
     );
 
     // Load configuration and override port
     let mut config = AppConfig::load().expect("Failed to load configuration");
+
+    // C3 — Fail-loud if JWT secret is the insecure default
+    if config.auth.jwt_secret == "your-super-secret-jwt-key-change-in-production"
+        || config.auth.jwt_secret.len() < 32
+    {
+        eprintln!(
+            "FATAL: JWT secret is too short or is the default placeholder.\n\
+             Set a strong secret (≥32 chars) in config.yaml or via the JWT_SECRET env var."
+        );
+        std::process::exit(1);
+    }
 
     // Setup database
     let pool = db::setup_database(&config.database.url)
@@ -106,13 +117,13 @@ async fn main() -> Result<(), rocket::Error> {
                 auth::handlers::refresh
             ],
         )
-        // MAIN INTERFACE: Chat with API0 integration
+        // Chat interface — Claude calls solanize-mcp tools to handle all Solana operations
         .mount(
             "/api/v1/chat",
             routes![
                 chat::handlers::create_session,
                 chat::handlers::get_sessions,
-                chat::handlers::send_message, // This handles ALL Solana operations via API0
+                chat::handlers::send_message,
                 chat::handlers::get_messages,
                 chat::handlers::chat_health,
                 chat::handlers::delete_session,
@@ -183,24 +194,11 @@ async fn main() -> Result<(), rocket::Error> {
     Ok(())
 }
 
-// NOTE: The following endpoints have been REMOVED and should be accessed via chat:
+// All Solana operations go through POST /api/v1/chat/sessions/{id}/messages
 //
-// REMOVED from /api/v1/transactions:
-// - check_balance -> Chat: "What's my balance?"
-// - get_wallet_tokens -> Chat: "Show my portfolio"
-// - get_wallet_history -> Chat: "Show my transaction history"
-// - get_pending_transactions -> Chat: "Any pending transactions?"
-// - get_token_price -> Chat: "What's the price of SOL?"
-// - search_tokens -> Chat: "Find RAY token"
-// - get_trading_context -> Automatically included in chat context
-//
-// ALL SOLANA OPERATIONS NOW GO THROUGH:
-// POST /api/v1/chat/sessions/{id}/messages
-//
-// This endpoint:
-// 1. Analyzes user message with API0
-// 2. Proposes actions with risk assessment
-// 3. Requires user approval
-// 4. Executes via Solana microservice
-// 5. Returns prepared transactions for signing
-// 6. Handles signed transaction submission
+// Flow:
+//  1. User message → Claude (Anthropic Messages API)
+//  2. Claude calls solanize-mcp tools server-side (MCP connector beta)
+//  3. For transfers/swaps: tool returns unsigned_transaction for frontend signing
+//  4. User signs in their browser wallet and resends with signed_transaction field
+//  5. Gateway submits signed tx to cli-solanize and returns the on-chain signature

@@ -1,5 +1,5 @@
-// src/payment/service.rs - REMOVED direct Solana calls that should go through API0
-// Keep only the transaction confirmation logic that handles local database state
+use graflog::app_log;
+// src/payment/service.rs
 
 use crate::{
     config::AppConfig,
@@ -9,6 +9,7 @@ use crate::{
 use chrono::Utc;
 use rocket::State;
 use sqlx::SqlitePool;
+use std::time::Duration;
 use uuid::Uuid;
 
 pub struct PaymentService<'a> {
@@ -20,10 +21,8 @@ impl<'a> PaymentService<'a> {
         Self { config }
     }
 
-    // REMOVED: All direct Solana service calls
-    // These should now go through API0 via the chat interface
-
-    // Keep only local transaction management
+    // Direct Solana calls are handled by solanize-mcp (via Claude's tool loop).
+    // This service manages only local transaction records and premium upgrades.
     pub async fn create_transaction(
         &self,
         user_id: &Uuid,
@@ -62,10 +61,10 @@ impl<'a> PaymentService<'a> {
             created_at: now,
         };
 
-        // NOTE: Transaction preparation should now happen through chat interface with API0
+        // unsigned_transaction is populated by the chat endpoint via solanize-mcp
         Ok(CreateTransactionResponse {
             transaction,
-            unsigned_transaction: "SHOULD_BE_PREPARED_VIA_CHAT_API0".to_string(),
+            unsigned_transaction: String::new(),
         })
     }
 
@@ -73,13 +72,24 @@ impl<'a> PaymentService<'a> {
         &self,
         transaction_id: Uuid,
         user_id: &Uuid,
-        transaction_signature: &str, // Changed from signed_transaction to signature
+        transaction_signature: &str,
         pool: &State<SqlitePool>,
     ) -> AppResult<Transaction> {
+        // Validate signature format (Solana signatures are 88-char base58)
+        let sig_bytes = bs58::decode(transaction_signature)
+            .into_vec()
+            .map_err(|_| AppError::Validation("Invalid transaction signature format".to_string()))?;
+        if sig_bytes.len() != 64 {
+            return Err(AppError::Validation("Invalid transaction signature length".to_string()));
+        }
+
+        // H1 — Verify the transaction actually landed on-chain before granting anything
+        self.verify_signature_on_chain(transaction_signature).await?;
+
         // Get transaction and verify ownership
         let transaction = sqlx::query_as::<_, Transaction>(
-            "SELECT id, user_id, transaction_type, amount, status, tx_hash, created_at 
-             FROM transactions 
+            "SELECT id, user_id, transaction_type, amount, status, tx_hash, created_at
+             FROM transactions
              WHERE id = ? AND user_id = ?",
         )
         .bind(transaction_id.to_string())
@@ -94,7 +104,7 @@ impl<'a> PaymentService<'a> {
             ));
         }
 
-        // Update transaction status - submission should have happened via chat/API0
+        // Update transaction status
         sqlx::query("UPDATE transactions SET status = ?, tx_hash = ? WHERE id = ?")
             .bind("confirmed")
             .bind(transaction_signature)
@@ -116,6 +126,69 @@ impl<'a> PaymentService<'a> {
         .await?;
 
         Ok(updated_transaction)
+    }
+
+    /// H1 — Verify a Solana transaction signature is confirmed on-chain.
+    /// Calls the Solana JSON-RPC `getSignatureStatuses` method directly via HTTP.
+    async fn verify_signature_on_chain(&self, signature: &str) -> AppResult<()> {
+        let rpc_url = &self.config.payment.solana_rpc_url;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| AppError::Internal(format!("Failed to build HTTP client: {}", e)))?;
+
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getSignatureStatuses",
+            "params": [[signature], {"searchTransactionHistory": true}]
+        });
+
+        let resp = client
+            .post(rpc_url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Solana RPC unreachable: {}", e)))?;
+
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| AppError::Internal(format!("Invalid RPC response: {}", e)))?;
+
+        let status = json
+            .pointer("/result/value/0")
+            .ok_or_else(|| AppError::Validation("Transaction not found on chain".to_string()))?;
+
+        if status.is_null() {
+            return Err(AppError::Validation(
+                "Transaction not found on chain — it may not have been submitted".to_string(),
+            ));
+        }
+
+        if let Some(err) = status.get("err") {
+            if !err.is_null() {
+                return Err(AppError::Validation(format!(
+                    "Transaction failed on chain: {:?}",
+                    err
+                )));
+            }
+        }
+
+        let confirmation = status
+            .get("confirmationStatus")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        if confirmation != "confirmed" && confirmation != "finalized" {
+            return Err(AppError::Validation(format!(
+                "Transaction not yet confirmed (status: {}). Try again shortly.",
+                confirmation
+            )));
+        }
+
+        app_log!(info, "Transaction {} verified on-chain ({})", signature, confirmation);
+        Ok(())
     }
 
     /// Handle successful transaction business logic
