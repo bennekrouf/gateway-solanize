@@ -30,7 +30,9 @@ chat:
   max_messages_per_session: 1000
   # Must be "claude" — MCP tool calling requires the Anthropic Messages API
   ai_provider: "claude"
-  # solanize-mcp URL: secret is embedded in the path (set by deploy-vps.sh)
+  # solanize-mcp public URL — Anthropic's cloud connects here to call tools,
+  # so this MUST be a public HTTPS URL, not 127.0.0.1.
+  # deploy-vps.sh replaces this with https://mcp.solanize.ai/mcp/<MCP_SECRET>
   solanize_mcp_url: "http://127.0.0.1:4010/mcp/change-me-in-production"
 
   ollama:

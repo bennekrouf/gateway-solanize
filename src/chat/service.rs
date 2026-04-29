@@ -463,14 +463,16 @@ impl<'a> ChatService<'a> {
     // ── Health / model listing ────────────────────────────────────────────────
 
     pub async fn health_check(&self) -> AppResult<bool> {
-        // Verify the solanize-mcp server is reachable
+        // Ping solanize-mcp /health.
+        // solanize_mcp_url is the public URL (e.g. https://mcp.solanize.ai/mcp/<secret>);
+        // strip the /mcp/<secret> suffix to get the base.
         let mcp_base = self
             .config
             .chat
             .solanize_mcp_url
             .split("/mcp/")
             .next()
-            .unwrap_or("http://127.0.0.1:4010");
+            .unwrap_or("https://mcp.solanize.ai");
 
         match self
             .client
