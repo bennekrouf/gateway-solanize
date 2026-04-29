@@ -4,7 +4,13 @@ server:
   workers: 4
 
 cors:
-  allowed_origins: ["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000"]
+  allowed_origins: [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://127.0.0.1:3000",
+    "https://solanize.ai",
+    "https://www.solanize.ai"
+  ]
   allowed_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
   # allowed_headers: ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"]
   allowed_headers: ["*"]
