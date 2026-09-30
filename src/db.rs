@@ -37,6 +37,33 @@ async fn run_migrations(pool: &SqlitePool) -> AppResult<()> {
     // Chat sessions table
     sqlx::query(
         r#"
+        CREATE TABLE IF NOT EXISTS api0_identities (
+            user_email TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            linked_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS api0_link_codes (
+            code TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS chat_sessions (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
