@@ -5,6 +5,7 @@ use rocket::{catchers, routes};
 use rocket_cors::{AllowedHeaders, AllowedOrigins, CorsOptions};
 use std::collections::HashMap;
 
+mod api0;
 mod auth;
 mod chat;
 mod config;
@@ -115,6 +116,17 @@ async fn main() -> Result<(), rocket::Error> {
                 auth::handlers::challenge,
                 auth::handlers::verify,
                 auth::handlers::refresh
+            ],
+        )
+        // Binding an api0 account to a wallet, so a tool call from Claude knows
+        // whose wallet it is operating.
+        .mount(
+            "/api/v1/link",
+            routes![
+                api0::handlers::create_link_code,
+                api0::handlers::redeem_link_code,
+                api0::handlers::linked_wallet,
+                api0::handlers::unlink
             ],
         )
         // Chat interface — Claude calls solanize-mcp tools to handle all Solana operations

@@ -10,9 +10,15 @@ pub mod types;
 mod tests {
     use super::*;
 
+    /// The fixture has to match the real structs field for field.
+    ///
+    /// It had drifted from both: `chat` still used flat `ollama_*` keys and was
+    /// missing `solanize_mcp_url`, and `payment` still named `solana_network`.
+    /// Serde reports only the first mismatch, so fixing one uncovered the next.
+    /// That is the value of this test -- it fails the moment config gains a
+    /// required field -- but only while it is kept in step.
     #[test]
     fn test_config_loading() {
-        // Test that config structure is valid
         let config_str = r#"
 server:
   host: "127.0.0.1"
@@ -33,13 +39,19 @@ auth:
 chat:
   max_sessions_per_user: 100
   max_messages_per_session: 1000
-  ai_provider: "ollama"
-  ollama_url: "http://localhost:11434"
-  ollama_model: "llama3.1"
-  ollama_timeout_seconds: 30
+  ai_provider: "claude"
+  solanize_mcp_url: "https://mcp.example.test/mcp/test-secret"
+  ollama:
+    url: "http://localhost:11434"
+    model: "llama3.1"
+    timeout_seconds: 30
+  api_providers: {}
 payment:
-  solana_network: "devnet"
+  solana_service_url: "http://127.0.0.1:5001"
+  cli_internal_secret: "test-internal-secret"
+  solana_rpc_url: "https://api.devnet.solana.com"
   premium_price_sol: 0.1
+  timeout_seconds: 30
 logging:
   level: "info"
   format: "json"
